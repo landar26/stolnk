@@ -1,90 +1,34 @@
-# React + Vite + Hono + Cloudflare Workers
+# Stolnk — worker and web sender
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/cloudflare/templates/tree/main/vite-react-template)
+See the [top-level README](../README.md) for what this is and how to run it.
 
-This template provides a minimal setup for building a React application with TypeScript and Vite, designed to run on Cloudflare Workers. It features hot module replacement, ESLint integration, and the flexibility of Workers deployments.
-
-![React + TypeScript + Vite + Cloudflare Workers](https://imagedelivery.net/wSMYJvS3Xw-n339CbDyDIA/fc7b4b62-442b-4769-641b-ad4422d74300/public)
-
-<!-- dash-content-start -->
-
-🚀 Supercharge your web development with this powerful stack:
-
-- [**React**](https://react.dev/) - A modern UI library for building interactive interfaces
-- [**Vite**](https://vite.dev/) - Lightning-fast build tooling and development server
-- [**Hono**](https://hono.dev/) - Ultralight, modern backend framework
-- [**Cloudflare Workers**](https://developers.cloudflare.com/workers/) - Edge computing platform for global deployment
-
-### ✨ Key Features
-
-- 🔥 Hot Module Replacement (HMR) for rapid development
-- 📦 TypeScript support out of the box
-- 🛠️ ESLint configuration included
-- ⚡ Zero-config deployment to Cloudflare's global network
-- 🎯 API routes with Hono's elegant routing
-- 🔄 Full-stack development setup
-- 🔎 Built-in Observability to monitor your Worker
-
-Get started in minutes with local development or deploy directly via the Cloudflare dashboard. Perfect for building modern, performant web applications at the edge.
-
-<!-- dash-content-end -->
-
-## Getting Started
-
-To start a new project with this template, run:
-
-```bash
-npm create cloudflare@latest -- --template=cloudflare/templates/vite-react-template
+```
+src/worker/          Hono API, Durable Object, D1 and R2 access
+  limits.ts          Every tunable number, including the three cost constraints
+  lib/site.ts        The address model: <name>.<host>/<path>, and nothing else knows it
+  do/DeviceHub.ts    Signalling — must stay on the hibernation API
+  routes/            devices · inboxes · resolve · transfers · delivery
+src/shared/          The envelope, shared by the browser and the test harness
+src/react-app/       Send page, landing page, how-it-works
+migrations/          D1 schema
+scripts/             e2e suite, vector generation, headless Mac stand-in
 ```
 
-A live deployment of this template is available at:
-[https://react-vite-template.templates.workers.dev](https://react-vite-template.templates.workers.dev)
+| Command | What it does |
+| --- | --- |
+| `npm run dev` | Local stack: worker, D1, R2, Durable Object |
+| `npm run build` | Type-check and build client and worker |
+| `npm run e2e` | End-to-end checks against a running dev server |
+| `npm run vectors` | Regenerate `testdata/vectors.json` |
 
-## Development
+Regenerating vectors changes what the Swift tests assert against, so run
+`swift test` in `stolnk_mac` afterwards.
 
-Install dependencies:
-
-```bash
-npm install
-```
-
-Start the development server with:
-
-```bash
-npm run dev
-```
-
-Your application will be available at [http://localhost:5173](http://localhost:5173).
-
-## Production
-
-Build your project for production:
-
-```bash
-npm run build
-```
-
-Preview your build locally:
-
-```bash
-npm run preview
-```
-
-Deploy your project to Cloudflare Workers:
-
-```bash
-npm run build && npm run deploy
-```
-
-Monitor your workers:
-
-```bash
-npx wrangler tail
-```
-
-## Additional Resources
-
-- [Cloudflare Workers Documentation](https://developers.cloudflare.com/workers/)
-- [Vite Documentation](https://vitejs.dev/guide/)
-- [React Documentation](https://reactjs.org/)
-- [Hono Documentation](https://hono.dev/)
+`PUBLIC_SITE_ORIGIN` is the apex origin and the only place the address shape is
+configured: `wrangler.json` holds the production value, `.dev.vars` the local one
+(see `.dev.vars.example`). An inbox lives one label below it, so locally that is
+`http://ryan.localhost:5173/inbox` — `*.localhost` resolves to loopback with no
+hosts file entry. Every link carries a path; the bare subdomain is not an
+address. The dev port is pinned with `strictPort`, because a link that says
+5173 while Vite drifted to 5174 is a dead link. After changing `wrangler.json`,
+run `npm run cf-typegen`.

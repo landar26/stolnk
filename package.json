@@ -12,6 +12,7 @@
 		"publish": true
 	},
 	"dependencies": {
+		"@noble/hashes": "^2.4.0",
 		"hono": "4.11.1",
 		"react": "19.2.1",
 		"react-dom": "19.2.1"
@@ -37,10 +38,14 @@
 		"build": "tsc -b && vite build",
 		"cf-typegen": "wrangler types",
 		"check": "tsc && vite build && wrangler deploy --dry-run",
-		"deploy": "wrangler deploy",
+		"db:ensure": "wrangler d1 info stolnk-db --json >/dev/null 2>&1 || wrangler d1 create stolnk-db",
+		"db:migrate": "wrangler d1 migrations apply DB --remote",
+		"deploy": "npm run db:ensure && npm run db:migrate && wrangler deploy",
 		"dev": "vite",
 		"lint": "eslint .",
-		"preview": "npm run build && vite preview"
+		"preview": "npm run build && vite preview",
+		"e2e": "node --experimental-strip-types scripts/e2e.ts",
+		"vectors": "node --experimental-strip-types scripts/gen-vectors.ts"
 	},
 	"type": "module"
 }

@@ -1,0 +1,9 @@
+# Copy to .dev.vars. Both keys are required for `npm run dev`.
+
+# Signs device and upload tokens. Any long random string will do locally.
+SESSION_SECRET="dev-only-insecure-secret-do-not-use-in-production"
+
+# The apex origin the site is served from. Inbox links are <name>.<this host>,
+# so locally an inbox is at http://ryan.localhost:5173 (*.localhost resolves to
+# loopback with no /etc/hosts entry). Production lives in wrangler.json.
+PUBLIC_SITE_ORIGIN="http://localhost:5173"

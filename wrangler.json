@@ -4,12 +4,51 @@
 	"main": "./src/worker/index.ts",
 	"compatibility_date": "2025-10-08",
 	"compatibility_flags": ["nodejs_compat"],
+	"workers_dev": false,
+	"routes": [
+		{ "pattern": "stolnk.com/*", "zone_name": "stolnk.com" },
+		{ "pattern": "*.stolnk.com/*", "zone_name": "stolnk.com" }
+	],
 	"observability": {
 		"enabled": true
 	},
 	"upload_source_maps": true,
 	"assets": {
 		"directory": "./dist/client",
+		"binding": "ASSETS",
 		"not_found_handling": "single-page-application"
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "stolnk-db",
+			"migrations_dir": "migrations"
+		}
+	],
+	"r2_buckets": [
+		{
+			"binding": "RELAY",
+			"bucket_name": "stolnk-relay"
+		}
+	],
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "HUB",
+				"class_name": "DeviceHub"
+			}
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["DeviceHub"]
+		}
+	],
+	"triggers": {
+		"crons": ["*/30 * * * *"]
+	},
+	"vars": {
+		"PUBLIC_SITE_ORIGIN": "https://stolnk.com"
 	}
 }
