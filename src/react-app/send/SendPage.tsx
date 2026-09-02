@@ -257,6 +257,35 @@ export function SendPage({ slug }: { slug: string }) {
 		);
 	}
 
+	/*
+	 * PRD 16.2 — the allowance ran out. Relay is the only transport in V1, so
+	 * nothing can be accepted until the month turns over or the owner upgrades.
+	 *
+	 * Told as a fact about the inbox, not as a failure and not as an error: the
+	 * sender did nothing wrong, and they are a stranger who should not be reading
+	 * anything about someone else's plan or bill. "Ask the person you are sending
+	 * to" is the whole of the escalation path, deliberately — they are the only
+	 * one who can act on it.
+	 */
+	if (!inbox.relay_available) {
+		return (
+			<main className="page">
+				<h1 className="inbox-title">{title}</h1>
+				<p className="status">
+					<span className="dot" />
+					Not accepting files right now
+				</p>
+				<div className="callout">
+					<p>
+						This inbox has reached its limit for this month. Nothing is wrong with your
+						files — try again after the 1st, or let {inbox.display_name} know you are
+						waiting to send something.
+					</p>
+				</div>
+			</main>
+		);
+	}
+
 	const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
 	const sentBytes = files.reduce((sum, file) => sum + file.sent, 0);
 	const overall = totalBytes > 0 ? Math.min(1, sentBytes / totalBytes) : 0;

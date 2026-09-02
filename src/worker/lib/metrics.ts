@@ -73,3 +73,28 @@ export function quotaRefused(fields: { inbox_id: string; reason: string; bytes: 
 export function transferExpired(fields: { inbox_id: string; bytes: number }): void {
 	emit("transfer.expired", fields);
 }
+
+/**
+ * PRD 15.4 — the conversion funnel.
+ *
+ * `wall` on an upgrade prompt says which capability someone reached for, which
+ * is the difference between "people buy this" and knowing *why*. The second
+ * inbox in particular is the primary evidence for H2 (PRD 2.1): a refusal
+ * recorded here is a user who wanted a second folder, whether or not they paid.
+ */
+export function upgradeWallHit(fields: { wall: "second_inbox" | "password" }): void {
+	emit("upgrade.wall", fields);
+}
+
+export function licenseActivated(fields: { seats_used: number; seats: number }): void {
+	emit("license.activated", fields);
+}
+
+export function licenseReleased(fields: { seats_used: number }): void {
+	emit("license.released", fields);
+}
+
+/** Refund or revocation. Deliberately loud: it is money going back out. */
+export function licenseRevoked(fields: { reason: string; devices: number }): void {
+	emit("license.revoked", fields);
+}

@@ -1,9 +1,20 @@
 # Copy to .dev.vars, or run `npm run secrets:init` to generate one.
 #
-# SESSION_SECRET is the only value the Worker takes from the environment. The
-# apex origin is not here any more: it is a build-time constant in
+# The apex origin is not here: it is a build-time constant in
 # src/shared/site-origin.ts, shared by the Worker and the browser bundle.
 
 # Signs device and upload tokens. Any long random string will do locally;
 # production gets its own, set with `npm run secrets:push`.
 SESSION_SECRET="dev-only-insecure-secret-do-not-use-in-production"
+
+# Licensing (PRD 16). In production these come from the Creem dashboard; here
+# they point at the stub Creem that `npm run e2e` starts, so the purchase path
+# can be exercised without an account and without charging anything.
+#
+# With the stub not running, activation fails with 503 and every device behaves
+# as Free — a realistic state to develop against, and the reason none of this is
+# required to run the app.
+CREEM_API_KEY="dev"
+CREEM_API_BASE="http://127.0.0.1:5199"
+CREEM_PRODUCT_ID="dev-product"
+CREEM_WEBHOOK_SECRET="dev-only-insecure-webhook-secret"

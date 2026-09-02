@@ -61,13 +61,18 @@ export const PRO: Tier = {
 };
 
 /**
- * V1 ships with every Pro capability unlocked, so entitlement resolution is a
- * single function rather than scattered checks. When licensing lands (PRD 16.5)
- * this is the only place that needs to learn about license keys.
+ * 16.1 — activations per licence. Creem is told the same number when the
+ * product is configured and is the one that enforces it; this copy exists so
+ * the settings screen can say "2 of 3" without a round trip.
  */
-export function tierForDevice(_deviceId: string): Tier {
-	return PRO;
-}
+export const PRO_SEATS = 3;
+
+/*
+ * Which tier a device is on is a database question, not a constant, so it lives
+ * in lib/entitlement.ts — `tierFor(env, deviceId)`. It used to be a
+ * `tierForDevice()` here that returned PRO unconditionally, which made every
+ * paywall in the codebase unreachable.
+ */
 
 /**
  * 6.1 — a name is a DNS label, because it *is* one: `<name>.stolnk.com`.
@@ -98,6 +103,13 @@ export const RATE_WINDOW_MS = 60_000;
 export const RATE_MAX_RESOLVES = 60;
 export const RATE_MAX_TRANSFERS = 20;
 export const RATE_MAX_PARTS = 600;
+/**
+ * 16 — licence calls. Far tighter than the rest, because `deactivate` takes a
+ * key and no session: it is the one endpoint where guessing gets you something.
+ * A real user activates once and releases a seat almost never, so a low ceiling
+ * costs nobody anything.
+ */
+export const RATE_MAX_LICENSE = 20;
 
 /** Ciphertext length for a given plaintext length under the chunk framing. */
 export function cipherSizeFor(plainSize: number): number {

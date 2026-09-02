@@ -1,17 +1,19 @@
 import { Hono } from "hono";
-import { MAX_DISPLAY_NAME, tierForDevice } from "../limits";
+import { MAX_DISPLAY_NAME } from "../limits";
 import { randomSlug } from "../lib/bytes";
 import { requireDevice } from "../lib/deviceauth";
+import { tierFor } from "../lib/entitlement";
 import {
 	badRequest,
-	fail,
 	notFound,
 	readJson,
 	requireString,
 	unknownDevice,
+	upgradeRequired,
 	type AppEnv,
 } from "../lib/http";
 import { createInbox, deviceName, requireSlug, type InboxRow } from "../lib/inbox";
+import { upgradeWallHit } from "../lib/metrics";
 import { hashVerifier, newSalt } from "../lib/password";
 import { inboxUrl } from "../lib/site";
 
@@ -79,18 +81,19 @@ inboxes.post("/", async (c) => {
 	const displayName = requireString(body.display_name, "display_name", MAX_DISPLAY_NAME);
 
 	const name = await nameOf(c.env, deviceId);
-	const tier = tierForDevice(deviceId);
+	const tier = await tierFor(c.env, deviceId);
 	const count = await c.env.DB.prepare(
 		"SELECT count(*) AS n FROM inboxes WHERE owner_device_id = ?",
 	)
 		.bind(deviceId)
 		.first<{ n: number }>();
 	if ((count?.n ?? 0) >= tier.maxInboxes) {
-		return fail(
-			402,
-			"upgrade_required",
-			"Free includes one inbox. Upgrade to route files to more folders.",
-		);
+		// PRD 15.4 — this refusal is the primary signal for H2 ("will people want a
+		// second inbox at all?"), which is why the wall is here at the end of the
+		// flow rather than on the button that opens it. Someone who never converts
+		// still tells us they wanted one.
+		upgradeWallHit({ wall: "second_inbox" });
+		upgradeRequired("Free includes one inbox. Upgrade to route files to more folders.");
 	}
 
 	// One path per device — and because a name belongs to exactly one device,
@@ -102,7 +105,7 @@ inboxes.post("/", async (c) => {
 		.first();
 	if (clash) return badRequest("That path is already in use.");
 
-	const row = await createInbox(c.env, { deviceId, slug, displayName });
+	const row = await createInbox(c.env, { deviceId, slug, displayName, tier });
 	return c.json(present(name, row), 201);
 });
 
@@ -155,9 +158,17 @@ inboxes.patch("/:id", async (c) => {
 	// password itself (PRD 18). null clears it.
 	if (body.password !== undefined) {
 		if (body.password === null) {
+			// Clearing is allowed on every tier, deliberately. A Pro user who lapses
+			// must never end up locked out of their own inbox by a password they can
+			// no longer remove — downgrading takes capabilities away, not access.
 			updates.push("password_salt = ?", "password_verifier_hash = ?");
 			values.push(null, null);
 		} else {
+			// 16.1 — setting one is Pro.
+			if ((await tierFor(c.env, deviceId)).name === "free") {
+				upgradeWallHit({ wall: "password" });
+				upgradeRequired("Password-protected links are part of Pro.");
+			}
 			const verifier = requireString(body.password, "password", 256);
 			const salt = requireString(
 				(body as { password_salt?: unknown }).password_salt,

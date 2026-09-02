@@ -432,3 +432,92 @@ input[type="text"] {
 	font-size: 0.86rem;
 	border-top: 1px solid var(--border);
 }
+
+/* Pricing (PRD 16.1) */
+
+.plans {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+	gap: 16px;
+	margin: 28px 0 40px;
+}
+
+.plan {
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--surface);
+	padding: 22px 20px;
+}
+
+.plan.featured {
+	border-color: var(--accent);
+	background: var(--accent-soft);
+}
+
+.plan h2 {
+	margin: 0;
+	font-size: 1rem;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: var(--text-dim);
+}
+
+.price {
+	font-size: 2.1rem;
+	font-weight: 600;
+	margin: 6px 0 12px;
+	color: var(--text);
+}
+
+.price s {
+	font-size: 1.1rem;
+	font-weight: 400;
+	color: var(--text-dim);
+	margin-left: 6px;
+}
+
+.plan-note {
+	font-size: 0.92rem;
+	margin: 0 0 18px;
+	color: var(--text-dim);
+}
+
+.plan small {
+	display: block;
+	margin-top: 10px;
+	font-size: 0.82rem;
+	color: var(--text-dim);
+}
+
+.compare {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 0.94rem;
+	margin-bottom: 8px;
+}
+
+.compare th,
+.compare td {
+	text-align: left;
+	padding: 10px 12px;
+	border-bottom: 1px solid var(--border);
+	vertical-align: top;
+}
+
+.compare thead th {
+	font-size: 0.78rem;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: var(--text-dim);
+	font-weight: 600;
+}
+
+.compare tbody th {
+	font-weight: 400;
+	color: var(--text-dim);
+	width: 40%;
+}
+
+.compare td {
+	color: var(--text);
+}

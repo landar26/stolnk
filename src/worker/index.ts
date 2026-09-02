@@ -1,14 +1,18 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { hubFor } from "./lib/deviceauth";
-import { type AppEnv } from "./lib/http";
+import { refundRelayBytes } from "./lib/entitlement";
+import { utcMonth, type AppEnv } from "./lib/http";
 import { transferExpired } from "./lib/metrics";
 import { verifyToken, type DeviceToken, type UploadToken } from "./lib/tokens";
+import { checkout } from "./routes/checkout";
 import { delivery } from "./routes/delivery";
 import { devices, names } from "./routes/devices";
 import { inboxes } from "./routes/inboxes";
+import { licenses } from "./routes/licenses";
 import { resolve } from "./routes/resolve";
 import { transfers } from "./routes/transfers";
+import { webhooks } from "./routes/webhooks";
 
 export { DeviceHub } from "./do/DeviceHub";
 
@@ -59,6 +63,12 @@ app.route("/api/v1/inboxes", inboxes);
 app.route("/api/v1/names", names);
 app.route("/api/v1/resolve", resolve);
 app.route("/api/v1/transfers", transfers);
+app.route("/api/v1/licenses", licenses);
+app.route("/api/v1/checkout", checkout);
+// Not under a device session, and deliberately outside the per-IP rate limits
+// that guard the rest: Creem retries with backoff, and throttling a webhook
+// turns a refund into one that silently never applies (PRD 16.5).
+app.route("/api/v1/webhooks", webhooks);
 app.route("/api/v1", delivery);
 
 /**
@@ -124,8 +134,11 @@ async function sweep(env: Env): Promise<void> {
 	await env.DB.prepare("DELETE FROM challenges WHERE expires_at < ?").bind(now).run();
 
 	const { results } = await env.DB.prepare(
-		`SELECT f.file_id, f.r2_key, f.upload_id, f.size, t.inbox_id
-		 FROM files f JOIN transfers t ON t.transfer_id = f.transfer_id
+		`SELECT f.file_id, f.r2_key, f.upload_id, f.size, t.inbox_id, t.created_at,
+		        i.owner_device_id
+		 FROM files f
+		 JOIN transfers t ON t.transfer_id = f.transfer_id
+		 JOIN inboxes i ON i.inbox_id = t.inbox_id
 		 WHERE t.expires_at < ? AND f.state IN ('uploading', 'ready')
 		 LIMIT 500`,
 	)
@@ -136,6 +149,8 @@ async function sweep(env: Env): Promise<void> {
 			upload_id: string | null;
 			size: number;
 			inbox_id: string;
+			created_at: number;
+			owner_device_id: string;
 		}>();
 
 	for (const file of results) {
@@ -148,11 +163,17 @@ async function sweep(env: Env): Promise<void> {
 		} catch {
 			// Object already gone.
 		}
-		await env.DB.prepare(
-			"UPDATE files SET state = 'expired', upload_id = NULL WHERE file_id = ?",
-		)
-			.bind(file.file_id)
-			.run();
+		// PRD 16.1 — the same refund the abort path makes. Bytes that were parked
+		// and never collected were charged against the owner's month at upload; a
+		// TTL running out is not a delivery, so they come back. Booked against the
+		// month the transfer was created in, which is often not this one — that is
+		// the whole reason a 24 hour TTL can straddle a month boundary.
+		await env.DB.batch([
+			env.DB.prepare("UPDATE files SET state = 'expired', upload_id = NULL WHERE file_id = ?").bind(
+				file.file_id,
+			),
+			refundRelayBytes(env, file.owner_device_id, file.size, utcMonth(file.created_at)),
+		]);
 		transferExpired({ inbox_id: file.inbox_id, bytes: file.size });
 	}
 

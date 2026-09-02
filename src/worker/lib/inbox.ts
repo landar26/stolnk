@@ -1,4 +1,4 @@
-import { NAME_RE, SLUG_RE, tierForDevice } from "../limits";
+import { NAME_RE, SLUG_RE, type Tier } from "../limits";
 import { randomId } from "./bytes";
 import { badRequest } from "./http";
 
@@ -130,6 +130,16 @@ export interface NewInbox {
 	deviceId: string;
 	slug: string;
 	displayName: string;
+	/**
+	 * The owner's tier at creation time, passed in rather than looked up so this
+	 * stays synchronous — registration needs the statement inside a batch with
+	 * the device row (see routes/devices.ts).
+	 *
+	 * `size_limit` is a snapshot, so it goes stale when the tier changes.
+	 * `applyTierToInboxes` refreshes it on upgrade, and enforcement clamps to the
+	 * live tier on the way down, so a stale row can never *raise* a ceiling.
+	 */
+	tier: Tier;
 }
 
 /**
@@ -141,7 +151,6 @@ export function inboxInsert(
 	env: Env,
 	options: NewInbox,
 ): { row: InboxRow; stmt: D1PreparedStatement } {
-	const tier = tierForDevice(options.deviceId);
 	const row: InboxRow = {
 		inbox_id: randomId(),
 		owner_device_id: options.deviceId,
@@ -149,7 +158,7 @@ export function inboxInsert(
 		display_name: options.displayName,
 		password_salt: null,
 		password_verifier_hash: null,
-		size_limit: tier.maxFileSize,
+		size_limit: options.tier.maxFileSize,
 		paused: 0,
 		// Every name is guessable by construction now (PRD 13.1), so the
 		// first-receive prompt is load-bearing for everyone. Settings can still

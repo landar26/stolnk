@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { MAX_DISPLAY_NAME, RATE_MAX_RESOLVES } from "../limits";
+import { FREE, MAX_DISPLAY_NAME, RATE_MAX_RESOLVES } from "../limits";
 import { fromBase64Url, randomId } from "../lib/bytes";
 import {
 	consumeChallenge,
@@ -85,10 +85,14 @@ devices.post("/", async (c) => {
 	// Registration hands back a working URL in one round trip, so the first inbox
 	// is created here rather than in a follow-up call. It is an ordinary inbox —
 	// deletable and movable like the rest.
+	// FREE, unconditionally: a licence attaches to a device that already exists,
+	// so a device cannot be on Pro at the instant it is created. Activating one
+	// later raises this inbox's ceiling (`applyTierToInboxes`).
 	const { row: inbox, stmt: insertInbox } = inboxInsert(c.env, {
 		deviceId,
 		slug,
 		displayName,
+		tier: FREE,
 	});
 
 	// Signed before anything is written. It touches neither the database nor the

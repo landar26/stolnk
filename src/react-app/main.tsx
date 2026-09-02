@@ -5,6 +5,7 @@ import { Download } from "./landing/Download.tsx";
 import { HowItWorks } from "./landing/HowItWorks.tsx";
 import { Landing } from "./landing/Landing.tsx";
 import { NotFound } from "./landing/NotFound.tsx";
+import { Pricing } from "./landing/Pricing.tsx";
 import { SendPage } from "./send/SendPage.tsx";
 import { SITE_ORIGIN } from "../shared/site-origin";
 
@@ -39,6 +40,7 @@ function Root() {
 	if (path === "") return <Landing />;
 	if (path === "how-it-works") return <HowItWorks />;
 	if (path === "download") return <Download />;
+	if (path === "pricing") return <Pricing />;
 	return <NotFound />;
 }
 

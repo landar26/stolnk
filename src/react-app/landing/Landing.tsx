@@ -11,7 +11,7 @@ export function Landing() {
 				<a href="/download">
 					<button className="primary">Download for Mac</button>
 				</a>
-				<small>Free · macOS 13+</small>
+				<small>Free to start · macOS 13+</small>
 			</section>
 
 			<section className="panel">
@@ -70,8 +70,21 @@ export function Landing() {
 				</div>
 			</section>
 
+			<section className="panel">
+				<div className="page wide">
+					<h2>Paid once, not monthly.</h2>
+					<p>
+						Free covers one inbox and 3 GB of relayed files a month. Pro is $39 — one
+						payment, three Macs, as many inboxes as you want, and 300 GB a month.
+					</p>
+					<p>
+						<a href="/pricing">See what's included →</a>
+					</p>
+				</div>
+			</section>
+
 			<footer className="footer">
-				Stolnk · <a href="/how-it-works">How it works</a>
+				Stolnk · <a href="/how-it-works">How it works</a> · <a href="/pricing">Pricing</a>
 			</footer>
 		</>
 	);

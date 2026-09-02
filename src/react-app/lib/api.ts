@@ -15,6 +15,14 @@ export interface InboxInfo {
 	part_size: number;
 	chunk_size: number;
 	ttl_hours: number;
+	/**
+	 * False once the owner's monthly relay allowance is spent (PRD 16.2).
+	 *
+	 * A boolean and nothing more. How much of their month the owner has used, and
+	 * which tier they are on, is not the sender's business — this page is served
+	 * to anyone holding the link.
+	 */
+	relay_available: boolean;
 	password: { required: boolean; salt?: string | null; iterations?: number };
 }
 

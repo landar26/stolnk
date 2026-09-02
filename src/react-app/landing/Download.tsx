@@ -7,7 +7,10 @@ export function Download() {
 	return (
 		<main className="page prose">
 			<h1 className="inbox-title">Download Stolnk</h1>
-			<p>macOS 13 or later. Free — one inbox, unlimited transfers.</p>
+			<p>
+				macOS 13 or later. Free — one inbox, 3 GB of relayed files a month.{" "}
+				<a href="/pricing">Pricing</a>
+			</p>
 
 			<p style={{ margin: "24px 0" }}>
 				<button className="primary" disabled>

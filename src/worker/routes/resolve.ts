@@ -4,9 +4,9 @@ import {
 	NOT_FOUND_DELAY_MS,
 	PART_SIZE,
 	RATE_MAX_RESOLVES,
-	tierForDevice,
 } from "../limits";
 import { hubFor } from "../lib/deviceauth";
+import { relayUsed, tierFor } from "../lib/entitlement";
 import { clientIp, notFound, sleep, type AppEnv } from "../lib/http";
 import { findInbox, requireSlug, type InboxRow } from "../lib/inbox";
 import { PBKDF2_ITERATIONS } from "../lib/password";
@@ -52,7 +52,15 @@ resolve.get("/", async (c) => {
 		.first<{ pubkey_kex: string }>();
 	if (!owner) return miss();
 
-	const tier = tierForDevice(inbox.owner_device_id);
+	const tier = await tierFor(c.env, inbox.owner_device_id);
+
+	// PRD 16.2 — running out of relay does not take the inbox down, so the send
+	// page needs to know before it lets someone pick a 4 GB video.
+	//
+	// A boolean, never the numbers. The sender is a stranger holding a link: how
+	// much of their month the owner has spent, and which tier they are on, is
+	// none of their business. This endpoint is unauthenticated.
+	const relayAvailable = (await relayUsed(c.env, inbox.owner_device_id)) < tier.monthlyRelayBytes;
 	let online = false;
 	try {
 		online = await hubFor(c.env, inbox.owner_device_id).isOnline();
@@ -75,6 +83,7 @@ resolve.get("/", async (c) => {
 		part_size: PART_SIZE,
 		chunk_size: CHUNK_SIZE,
 		ttl_hours: tier.ttlHours,
+		relay_available: relayAvailable,
 		password: inbox.password_verifier_hash
 			? { required: true, salt: inbox.password_salt, iterations: PBKDF2_ITERATIONS }
 			: { required: false },
@@ -94,6 +103,8 @@ export interface ResolveResponse {
 	part_size: number;
 	chunk_size: number;
 	ttl_hours: number;
+	/** False once the owner's monthly relay allowance is spent (PRD 16.2). */
+	relay_available: boolean;
 	password: { required: boolean; salt?: string | null; iterations?: number };
 }
 

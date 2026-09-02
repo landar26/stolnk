@@ -9,6 +9,7 @@
  * PRD 18 that can be checked without a real Mac or a real phone.
  */
 import { readFileSync } from "node:fs";
+import { createServer } from "node:http";
 import {
 	CHUNK_SIZE,
 	chunkCountFor,
@@ -79,6 +80,96 @@ async function api(
 		body = text;
 	}
 	return { status: response.status, body };
+}
+
+// ---------------------------------------------------------------------------
+// A stand-in for Creem (PRD 16.5).
+//
+// The licensing routes are worth testing against something, and the something
+// cannot be Creem itself: a test suite that needs an account, a network and a
+// live payment provider is a test suite nobody runs. This stub speaks the three
+// calls the Worker makes and enforces the one rule that matters, the activation
+// limit, so the whole path — key in the app, seat claimed, tier changed, walls
+// gone — is exercised end to end locally.
+//
+// `.dev.vars` points CREEM_API_BASE here. With this not running, activation
+// returns 503 and every device is Free, which is the other state worth being
+// able to develop in.
+// ---------------------------------------------------------------------------
+
+const CREEM_PORT = 5199;
+
+/** Keys the stub understands, chosen so each maps to one branch of the route. */
+const GOOD_KEY = "STOLNK-TEST-GOOD-KEY";
+const FULL_KEY = "STOLNK-TEST-FULL-KEY";
+const BAD_KEY = "STOLNK-TEST-NO-SUCH-KEY";
+
+const creemInstances = new Map<string, string>();
+let creemActivations = 0;
+
+const creem = createServer((request, response) => {
+	let raw = "";
+	request.on("data", (chunk) => (raw += chunk));
+	request.on("end", () => {
+		const body = raw ? (JSON.parse(raw) as { key?: string; instance_id?: string }) : {};
+		const reply = (status: number, payload: unknown) => {
+			response.writeHead(status, { "content-type": "application/json" });
+			response.end(JSON.stringify(payload));
+		};
+		const license = (extra: Record<string, unknown> = {}) => ({
+			id: "lic_test",
+			status: "active",
+			activation: creemActivations,
+			activation_limit: 3,
+			...extra,
+		});
+
+		if (request.url === "/v1/licenses/activate") {
+			if (body.key === FULL_KEY) return reply(409, { error: "activation limit reached" });
+			if (body.key !== GOOD_KEY) return reply(404, { error: "not found" });
+			const instanceId = `inst_${creemActivations++}`;
+			creemInstances.set(instanceId, body.key);
+			return reply(200, license({ instance: { id: instanceId } }));
+		}
+		if (request.url === "/v1/licenses/deactivate") {
+			if (!body.instance_id || !creemInstances.has(body.instance_id)) {
+				return reply(404, { error: "no such instance" });
+			}
+			creemInstances.delete(body.instance_id);
+			creemActivations -= 1;
+			return reply(200, license());
+		}
+		reply(404, { error: "unhandled" });
+	});
+});
+await new Promise<void>((resolve) => creem.listen(CREEM_PORT, "127.0.0.1", resolve));
+
+/**
+ * The webhook secret the running dev server is using. Read rather than fixed:
+ * `npm run secrets:init` generates one, and a test that assumed a constant
+ * would pass against the wrong server.
+ */
+function devWebhookSecret(): string {
+	try {
+		const line = readFileSync(new URL("../.dev.vars", import.meta.url), "utf8")
+			.split("\n")
+			.find((row) => row.startsWith("CREEM_WEBHOOK_SECRET="));
+		return line ? line.slice(line.indexOf("=") + 1).trim().replace(/^"|"$/g, "") : "";
+	} catch {
+		return "";
+	}
+}
+
+async function signWebhook(payload: string): Promise<string> {
+	const key = await crypto.subtle.importKey(
+		"raw",
+		new TextEncoder().encode(devWebhookSecret()),
+		{ name: "HMAC", hash: "SHA-256" },
+		false,
+		["sign"],
+	);
+	const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(payload));
+	return [...new Uint8Array(mac)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 // ---------------------------------------------------------------------------
@@ -352,6 +443,230 @@ check(
 	"an unknown device is 404 unknown_device, not 401",
 	ghost.status === 404 && ghost.body?.error === "unknown_device",
 	JSON.stringify(ghost.body),
+);
+
+section("Free tier walls (PRD 16.1 — every one of these was unreachable in V1)");
+const firstInbox = registered.body.inbox.inbox_id as string;
+
+const freePlan = await api("/api/v1/licenses/status", { token });
+check(
+	"a new device is Free",
+	freePlan.status === 200 && freePlan.body.tier === "free",
+	JSON.stringify(freePlan.body),
+);
+check(
+	"Free is told its relay allowance, and has spent none of it",
+	freePlan.body.relay_limit === 3 * 1024 ** 3 && freePlan.body.relay_used === 0,
+	JSON.stringify(freePlan.body),
+);
+
+const walledSecond = await api("/api/v1/inboxes", {
+	method: "POST",
+	token,
+	body: JSON.stringify({ slug: "client-a", display_name: "Client A" }),
+});
+check(
+	"Free is refused a second inbox (H2's signal, PRD 15.4)",
+	walledSecond.status === 402 && walledSecond.body.error === "upgrade_required",
+	JSON.stringify(walledSecond.body),
+);
+
+const walledPassword = await api(`/api/v1/inboxes/${firstInbox}`, {
+	method: "PATCH",
+	token,
+	body: JSON.stringify({ password: "verifier", password_salt: "salt" }),
+});
+check(
+	"Free is refused password protection",
+	walledPassword.status === 402 && walledPassword.body.error === "upgrade_required",
+	JSON.stringify(walledPassword.body),
+);
+const clearOnFree = await api(`/api/v1/inboxes/${firstInbox}`, {
+	method: "PATCH",
+	token,
+	body: JSON.stringify({ password: null }),
+});
+check(
+	"Free may still clear a password — downgrading must not lock anyone out",
+	clearOnFree.status === 200,
+	JSON.stringify(clearOnFree.body),
+);
+
+const freeResolve = await api(on(NAME, "/api/v1/resolve?slug=inbox"));
+check(
+	"Free's per-file ceiling is 2 GB, and the send page is told so",
+	freeResolve.body.max_file_size === 2 * 1024 ** 3,
+	String(freeResolve.body.max_file_size),
+);
+
+// An over-size file is over quota, not malformed. This distinction was dead
+// code for the whole of V1 — with every device on Pro the two ceilings were
+// always equal, so the 400 always fired first and the message a real Free user
+// would see ("size is out of range") had never been looked at.
+const tooBig = await api("/api/v1/transfers", {
+	method: "POST",
+	body: JSON.stringify({
+		inbox_id: freeResolve.body.inbox_id,
+		files: [
+			{
+				enc_name: "x",
+				name_iv: "x",
+				size: 5 * 1024 ** 3,
+				nonce_prefix: "x",
+				wrapped_key: "x",
+				key_iv: "x",
+				eph_pub: "x",
+			},
+		],
+	}),
+});
+check(
+	"a file over Free's ceiling is refused as quota, not as a bad request",
+	tooBig.status === 413 && tooBig.body.error === "quota_exceeded",
+	`${tooBig.status} ${JSON.stringify(tooBig.body)}`,
+);
+check(
+	"and the refusal names the ceiling that applies",
+	/2 GB/.test(String(tooBig.body.message)),
+	String(tooBig.body.message),
+);
+
+// The monthly allowance is checked before any bytes move, so this costs nothing
+// to test: two 1.6 GB files declared is 3.2 GB against a 3 GB month.
+const overMonth = await api("/api/v1/transfers", {
+	method: "POST",
+	body: JSON.stringify({
+		inbox_id: freeResolve.body.inbox_id,
+		files: [1, 2].map(() => ({
+			enc_name: "x",
+			name_iv: "x",
+			size: Math.floor(1.6 * 1024 ** 3),
+			nonce_prefix: "x",
+			wrapped_key: "x",
+			key_iv: "x",
+			eph_pub: "x",
+		})),
+	}),
+});
+check(
+	"the monthly relay allowance refuses an over-budget transfer",
+	overMonth.status === 413 && /this month/.test(String(overMonth.body.message)),
+	`${overMonth.status} ${JSON.stringify(overMonth.body)}`,
+);
+check(
+	"and says so without naming the owner's tier, usage or bill (PRD 13.1)",
+	!/free|pro|quota|gb|\d/i.test(String(overMonth.body.message)),
+	String(overMonth.body.message),
+);
+
+section("Licensing (PRD 16.5 — Creem is the authority, D1 is the cache)");
+const badKey = await api("/api/v1/licenses/activate", {
+	method: "POST",
+	token,
+	body: JSON.stringify({ key: BAD_KEY }),
+});
+check(
+	"an unrecognised key is rejected as itself, not as a generic error",
+	badKey.status === 404 && badKey.body.error === "license_not_found",
+	JSON.stringify(badKey.body),
+);
+
+const fullKey = await api("/api/v1/licenses/activate", {
+	method: "POST",
+	token,
+	body: JSON.stringify({ key: FULL_KEY }),
+});
+check(
+	"a licence with no seats left says so, and says what to do",
+	fullKey.status === 409 && fullKey.body.error === "seats_full",
+	JSON.stringify(fullKey.body),
+);
+
+const activated = await api("/api/v1/licenses/activate", {
+	method: "POST",
+	token,
+	body: JSON.stringify({ key: GOOD_KEY }),
+});
+check(
+	"activating a good key makes the device Pro",
+	activated.status === 200 && activated.body.tier === "pro",
+	JSON.stringify(activated.body),
+);
+const seatsAfterActivation = activated.body.license?.seats_used as number;
+check(
+	"and reports the seat it took",
+	activated.body.license?.seats === 3 && seatsAfterActivation >= 1,
+	JSON.stringify(activated.body.license),
+);
+check(
+	"Pro's allowance is 300 GB",
+	activated.body.relay_limit === 300 * 1024 ** 3,
+	String(activated.body.relay_limit),
+);
+
+const reactivated = await api("/api/v1/licenses/activate", {
+	method: "POST",
+	token,
+	body: JSON.stringify({ key: GOOD_KEY }),
+});
+check(
+	"re-entering the same key is idempotent, not a second seat",
+	reactivated.status === 200 && reactivated.body.license?.seats_used === seatsAfterActivation,
+	JSON.stringify(reactivated.body.license),
+);
+
+const upgradedResolve = await api(on(NAME, "/api/v1/resolve?slug=inbox"));
+check(
+	"the inbox created before the purchase gets the Pro ceiling",
+	upgradedResolve.body.max_file_size === 20 * 1024 ** 3,
+	String(upgradedResolve.body.max_file_size),
+);
+check(
+	"and the Pro retention window (PRD 16.1)",
+	upgradedResolve.body.ttl_hours === 24 * 7,
+	String(upgradedResolve.body.ttl_hours),
+);
+
+section("Relay accounting (PRD 16.1 — booked on accept, returned if undelivered)");
+const usedBefore = (await api("/api/v1/licenses/status", { token })).body.relay_used as number;
+const bookSize = 100 * 1024 * 1024;
+// Declared, never uploaded: booking happens when the transfer is accepted, so
+// this measures the ledger without moving 100 MB.
+const booked = await api("/api/v1/transfers", {
+	method: "POST",
+	body: JSON.stringify({
+		inbox_id: registered.body.inbox.inbox_id,
+		files: [
+			{
+				enc_name: "x",
+				name_iv: "x",
+				size: bookSize,
+				nonce_prefix: "x",
+				wrapped_key: "x",
+				key_iv: "x",
+				eph_pub: "x",
+			},
+		],
+	}),
+});
+check("a transfer is accepted", booked.status === 201, JSON.stringify(booked.body));
+const usedAfterBooking = (await api("/api/v1/licenses/status", { token })).body
+	.relay_used as number;
+check(
+	"accepting a transfer books its bytes against the month",
+	usedAfterBooking === usedBefore + bookSize,
+	`${usedBefore} -> ${usedAfterBooking}`,
+);
+
+await api(`/api/v1/transfers/${booked.body.transfer_id}/abort`, {
+	method: "POST",
+	token: booked.body.token,
+});
+const usedAfterAbort = (await api("/api/v1/licenses/status", { token })).body.relay_used as number;
+check(
+	"withdrawing it gives the bytes back — parking is not delivery",
+	usedAfterAbort === usedBefore,
+	`${usedAfterBooking} -> ${usedAfterAbort}`,
 );
 
 section("Inbox model and routing (PRD 6)");
@@ -819,6 +1134,115 @@ check(
 	emptied.status === 200 && emptied.body.inboxes.length === 0,
 	JSON.stringify(emptied.body),
 );
+
+section("Releasing a seat (PRD 7.2 — a dead Mac must not hold one forever)");
+const wrongOwner = await api("/api/v1/licenses/deactivate", {
+	method: "POST",
+	body: JSON.stringify({ key: BAD_KEY, device_id: deviceId }),
+});
+check(
+	"releasing with the wrong key says only 'no such activation'",
+	wrongOwner.status === 404 && !/pro|free|seat/i.test(String(wrongOwner.body.message)),
+	JSON.stringify(wrongOwner.body),
+);
+
+// No device session on this call, deliberately: the key is the credential.
+// A Mac that is lost or dead can never sign anything again, so requiring its
+// own signature to free its seat would strand the seat permanently.
+const released = await api("/api/v1/licenses/deactivate", {
+	method: "POST",
+	body: JSON.stringify({ key: GOOD_KEY, device_id: deviceId }),
+});
+check(
+	"the seat is released by whoever holds the key, with no session",
+	released.status === 200 && released.body.released === true,
+	JSON.stringify(released.body),
+);
+const afterRelease = await api("/api/v1/licenses/status", { token });
+check(
+	"and the device is Free again",
+	afterRelease.status === 200 && afterRelease.body.tier === "free",
+	JSON.stringify(afterRelease.body),
+);
+
+section("Checkout webhook (Creem's current license_keys payload)");
+const checkoutBody = JSON.stringify({
+	eventType: "checkout.completed",
+	object: { license_keys: [{ key: GOOD_KEY }] },
+});
+const completedCheckout = await api("/api/v1/webhooks/creem", {
+	method: "POST",
+	headers: { "creem-signature": await signWebhook(checkoutBody) },
+	body: checkoutBody,
+});
+check(
+	"a signed checkout stores the nested Creem licence instead of ignoring it",
+	completedCheckout.status === 200 && completedCheckout.body.ok === true && !completedCheckout.body.ignored,
+	JSON.stringify(completedCheckout.body),
+);
+
+section("Refund webhook (PRD 16.5 — revocation is push, and never destructive)");
+const unsigned = await api("/api/v1/webhooks/creem", {
+	method: "POST",
+	body: JSON.stringify({ eventType: "refund.created", object: { key: GOOD_KEY } }),
+});
+check(
+	"an unsigned webhook is refused",
+	unsigned.status === 401 && unsigned.body.error === "bad_signature",
+	JSON.stringify(unsigned.body),
+);
+const forgedHook = await api("/api/v1/webhooks/creem", {
+	method: "POST",
+	headers: { "creem-signature": "0".repeat(64) },
+	body: JSON.stringify({ eventType: "refund.created", object: { key: GOOD_KEY } }),
+});
+check("a forged signature is refused", forgedHook.status === 401, JSON.stringify(forgedHook.body));
+
+// A device of its own, so the refund below cannot affect anything above it.
+const refundee = await makeDevice();
+const refundName = `e2e-rf-${Math.random().toString(36).slice(2, 8)}`;
+const refundReg = await register(refundName, refundee);
+const refundToken = refundReg.body.token as string;
+await api("/api/v1/licenses/activate", {
+	method: "POST",
+	token: refundToken,
+	body: JSON.stringify({ key: GOOD_KEY }),
+});
+const extra = await api("/api/v1/inboxes", {
+	method: "POST",
+	token: refundToken,
+	body: JSON.stringify({ slug: "client-b", display_name: "Client B" }),
+});
+check("Pro created a second inbox before the refund", extra.status === 201);
+
+const refundBody = JSON.stringify({ eventType: "refund.created", object: { key: GOOD_KEY } });
+const refunded = await api("/api/v1/webhooks/creem", {
+	method: "POST",
+	headers: { "creem-signature": await signWebhook(refundBody) },
+	body: refundBody,
+});
+check("a correctly signed refund is accepted", refunded.status === 200, JSON.stringify(refunded.body));
+
+const afterRefund = await api("/api/v1/licenses/status", { token: refundToken });
+check(
+	"the refunded device is Free again",
+	afterRefund.body.tier === "free",
+	JSON.stringify(afterRefund.body),
+);
+const survived = await api("/api/v1/inboxes", { token: refundToken });
+check(
+	"both inboxes still exist — a refund pauses, it never deletes",
+	survived.body.inboxes.length === 2,
+	JSON.stringify(survived.body.inboxes.map((i: any) => [i.slug, i.paused])),
+);
+check(
+	"the inbox beyond the free allowance is paused, the oldest still live",
+	survived.body.inboxes.find((i: any) => i.slug === "client-b")?.paused === true &&
+		survived.body.inboxes.find((i: any) => i.slug === "inbox")?.paused === false,
+	JSON.stringify(survived.body.inboxes.map((i: any) => [i.slug, i.paused])),
+);
+
+creem.close();
 
 console.log(`\n${passed} passed, ${failures.length} failed`);
 if (failures.length) {

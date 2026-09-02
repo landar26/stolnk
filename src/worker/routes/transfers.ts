@@ -6,12 +6,13 @@ import {
 	RATE_MAX_PARTS,
 	RATE_MAX_TRANSFERS,
 	UPLOAD_TOKEN_TTL_MS,
+	PRO,
 	cipherSizeFor,
 	partCountFor,
-	tierForDevice,
 } from "../limits";
 import { randomId } from "../lib/bytes";
 import { hubFor, pushInBackground } from "../lib/deviceauth";
+import { bookRelayBytes, refundRelayBytes, relayUsed, tierFor } from "../lib/entitlement";
 import {
 	badRequest,
 	clientIp,
@@ -23,6 +24,7 @@ import {
 	requireString,
 	unauthorized,
 	utcDay,
+	utcMonth,
 	type AppEnv,
 } from "../lib/http";
 import { type InboxRow } from "../lib/inbox";
@@ -98,13 +100,24 @@ transfers.post("/", async (c) => {
 		}
 	}
 
-	const tier = tierForDevice(inbox.owner_device_id);
+	const tier = await tierFor(c.env, inbox.owner_device_id);
 	const now = Date.now();
+
+	// `inboxes.size_limit` was written when the inbox was created, so it can be a
+	// tier behind. The lower of the two wins, which is what makes a refund take
+	// effect immediately: the row may still say 20 GB, but the tier says 2.
+	const fileCap = Math.min(inbox.size_limit, tier.maxFileSize);
 
 	// Validate every file before creating any R2 upload, so a rejected batch
 	// leaves no orphaned multipart uploads behind.
+	//
+	// The bound here is the largest any tier allows, deliberately, and not
+	// `fileCap`. This call reports a malformed request (400 "out of range"), and
+	// a 3 GB file from someone on Free is not malformed — it is over quota, which
+	// PRD 8.6 #3 says is a state to explain rather than an error to report. The
+	// tier ceiling is applied just below, where it can say so in those words.
 	const planned = (files as FileInit[]).map((file, index) => {
-		const size = requireInt(file.size, `files[${index}].size`, 0, tier.maxFileSize);
+		const size = requireInt(file.size, `files[${index}].size`, 0, PRO.maxFileSize);
 		return {
 			file_id: randomId(),
 			enc_name: requireString(file.enc_name, `files[${index}].enc_name`, MAX_FILENAME_CIPHERTEXT),
@@ -119,16 +132,55 @@ transfers.post("/", async (c) => {
 	});
 
 	const totalBytes = planned.reduce((sum, file) => sum + file.size, 0);
+
+	// V1 has one path (PRD 8.2 / M4 was cut), so this is a constant rather than
+	// something the client asserts — a sender must not be able to send its
+	// transfer for free by claiming "lan".
+	const transport: "relay" | "lan" = "relay";
 	for (const file of planned) {
-		if (file.size > inbox.size_limit) {
+		if (file.size > fileCap) {
 			return quotaExceeded(
-				`Files over ${Math.floor(inbox.size_limit / 1024 ** 3)} GB are not accepted by this inbox.`,
+				`Files over ${Math.floor(fileCap / 1024 ** 3)} GB are not accepted by this inbox.`,
+			);
+		}
+	}
+
+	// PRD 16.1 — the monthly relay allowance. This is the paid boundary, and the
+	// only quota in the product that a purchase moves.
+	//
+	// It is keyed by device, not by inbox: the daily ceiling below is abuse
+	// control on one link, this is what someone bought. Booked now and returned
+	// if the transfer never lands, so ciphertext that is aborted or expires
+	// unread does not quietly eat the owner's month.
+	//
+	// Only the relay path counts. Everything is the relay path today, but writing
+	// the condition now means M4 (LAN direct, PRD 8.2) does not have to revisit
+	// billing — and PRD 16.2 turns on LAN being free forever.
+	const month = utcMonth(now);
+	const relayed = transport === "relay" ? totalBytes : 0;
+	if (relayed > 0) {
+		const used = await relayUsed(c.env, inbox.owner_device_id, month);
+		if (used + relayed > tier.monthlyRelayBytes) {
+			quotaRefused({ inbox_id: inboxId, reason: "monthly_relay", bytes: totalBytes });
+			// Addressed to the sender, who is a stranger and not at fault. It says
+			// what to do without naming the owner's tier, their usage, or their
+			// bill — PRD 16.2 promises the inbox never looks broken, and 13.1 says
+			// an unauthenticated caller learns nothing it did not already know.
+			return quotaExceeded(
+				"This inbox cannot take more files this month. Try again later, or ask the person you are sending to.",
 			);
 		}
 	}
 
 	// PRD 8.5 — total parked bytes per device. This is a hard ceiling, not a
 	// billing trigger: over quota we refuse the upload rather than charge for it.
+	//
+	// Deliberately *after* the monthly allowance. On Free the two ceilings are
+	// both 3 GB, so a single over-budget transfer trips both — and this one's
+	// message ("files still waiting to be delivered") is a plain lie when the
+	// queue is empty, which is exactly the case where a first-time sender meets
+	// it. The monthly wall is also the only one of the two that the owner can do
+	// something about.
 	const pending = await c.env.DB.prepare(
 		`SELECT ifnull(sum(f.size), 0) AS bytes
 		 FROM files f
@@ -223,12 +275,18 @@ transfers.post("/", async (c) => {
 		});
 	}
 
-	await c.env.DB.prepare(
-		`INSERT INTO usage_daily (inbox_id, day, files, bytes) VALUES (?, ?, ?, ?)
-		 ON CONFLICT (inbox_id, day) DO UPDATE SET files = files + ?, bytes = bytes + ?`,
-	)
-		.bind(inboxId, day, planned.length, totalBytes, planned.length, totalBytes)
-		.run();
+	// Both counters in one batch: a transfer that is accepted but not booked
+	// would be free bytes, and one booked but not accepted would be stolen ones.
+	const counters = [
+		c.env.DB.prepare(
+			`INSERT INTO usage_daily (inbox_id, day, files, bytes) VALUES (?, ?, ?, ?)
+			 ON CONFLICT (inbox_id, day) DO UPDATE SET files = files + ?, bytes = bytes + ?`,
+		).bind(inboxId, day, planned.length, totalBytes, planned.length, totalBytes),
+	];
+	if (relayed > 0) {
+		counters.push(bookRelayBytes(c.env, inbox.owner_device_id, relayed, month));
+	}
+	await c.env.DB.batch(counters);
 
 	transferStarted({
 		inbox_id: inboxId,
@@ -453,10 +511,16 @@ transfers.post("/:tid/abort", async (c) => {
 	await authoriseUpload(c, transferId);
 
 	const { results } = await c.env.DB.prepare(
-		"SELECT file_id, r2_key, upload_id, state FROM files WHERE transfer_id = ?",
+		"SELECT file_id, r2_key, upload_id, state, size FROM files WHERE transfer_id = ?",
 	)
 		.bind(transferId)
-		.all<{ file_id: string; r2_key: string; upload_id: string | null; state: string }>();
+		.all<{
+			file_id: string;
+			r2_key: string;
+			upload_id: string | null;
+			state: string;
+			size: number;
+		}>();
 
 	for (const file of results) {
 		if (file.state === "delivered") continue;
@@ -471,14 +535,39 @@ transfers.post("/:tid/abort", async (c) => {
 		}
 	}
 
-	await c.env.DB.batch([
+	// PRD 16.1 — give back what was booked but never delivered. Per file, not
+	// `transfers.total_bytes`: a transfer can be part delivered, and the owner
+	// keeps paying only for the parts that actually reached them.
+	//
+	// Refunded against the month the transfer was *created* in, so a transfer
+	// booked on the 31st and withdrawn on the 1st credits the month that charged
+	// it rather than handing the new month a discount.
+	const owner = await c.env.DB.prepare(
+		`SELECT i.owner_device_id AS device_id, t.created_at
+		 FROM transfers t JOIN inboxes i ON i.inbox_id = t.inbox_id
+		 WHERE t.transfer_id = ?`,
+	)
+		.bind(transferId)
+		.first<{ device_id: string; created_at: number }>();
+
+	const undelivered = results
+		.filter((file) => file.state !== "delivered" && file.state !== "aborted")
+		.reduce((sum, file) => sum + file.size, 0);
+
+	const writes = [
 		c.env.DB.prepare(
 			"UPDATE files SET state = 'aborted', upload_id = NULL WHERE transfer_id = ? AND state != 'delivered'",
 		).bind(transferId),
 		c.env.DB.prepare("UPDATE transfers SET state = 'aborted' WHERE transfer_id = ?").bind(
 			transferId,
 		),
-	]);
+	];
+	if (owner && undelivered > 0) {
+		writes.push(
+			refundRelayBytes(c.env, owner.device_id, undelivered, utcMonth(owner.created_at)),
+		);
+	}
+	await c.env.DB.batch(writes);
 
 	return c.json({ aborted: true });
 });

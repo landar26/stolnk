@@ -82,3 +82,25 @@ export const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve
 export function utcDay(now = Date.now()): string {
 	return new Date(now).toISOString().slice(0, 10);
 }
+
+/**
+ * The bucket key for the monthly relay allowance (PRD 16.1).
+ *
+ * Refunds are keyed by the *transfer's* month, not the current one, so a
+ * transfer created on the 31st and expired on the 1st returns its bytes to the
+ * month that booked them.
+ */
+export function utcMonth(now = Date.now()): string {
+	return new Date(now).toISOString().slice(0, 7);
+}
+
+/**
+ * PRD 16 — this capability needs Pro.
+ *
+ * 402 rather than 403 because the client has somewhere to go: every wall in the
+ * product is an upgrade prompt, never a dead end. Distinct from
+ * `quotaExceeded` (413), which means "Pro would not help, wait".
+ */
+export function upgradeRequired(message: string): never {
+	return fail(402, "upgrade_required", message);
+}
