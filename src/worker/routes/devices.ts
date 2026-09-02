@@ -91,6 +91,14 @@ devices.post("/", async (c) => {
 		displayName,
 	});
 
+	// Signed before anything is written. It touches neither the database nor the
+	// network, but it does read SESSION_SECRET — and when that is unset it throws.
+	// Landing that failure *after* the batch left a registered device nobody ever
+	// received a token for, and a name taken forever by a row its owner could not
+	// authenticate as. Every retry burned another name. Nothing below this line
+	// can fail without the batch itself failing.
+	const session = await issueDeviceToken(c.env, deviceId);
+
 	try {
 		// One batch, so a device can never exist without the inbox that gives it a
 		// URL — and so the UNIQUE(name) that loses a race takes the inbox with it.
@@ -108,7 +116,6 @@ devices.post("/", async (c) => {
 		throw error;
 	}
 
-	const session = await issueDeviceToken(c.env, deviceId);
 	return c.json(
 		{
 			device_id: deviceId,
@@ -118,7 +125,7 @@ devices.post("/", async (c) => {
 			inbox: {
 				inbox_id: inbox.inbox_id,
 				slug: inbox.path_slug,
-				url: inboxUrl(c.env, name, inbox.path_slug),
+				url: inboxUrl(name, inbox.path_slug),
 				display_name: inbox.display_name,
 			},
 		},
@@ -187,7 +194,7 @@ devices.get("/me", async (c) => {
 	return c.json({
 		device_id: deviceId,
 		name,
-		inboxes: results.map((row) => present(c.env, name, row)),
+		inboxes: results.map((row) => present(name, row)),
 	});
 });
 
@@ -234,7 +241,7 @@ names.post("/", async (c) => {
 	)
 		.bind(deviceId)
 		.all<InboxRow>();
-	return c.json({ name, inboxes: results.map((row) => present(c.env, name, row)) });
+	return c.json({ name, inboxes: results.map((row) => present(name, row)) });
 });
 
 /**

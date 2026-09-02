@@ -6,6 +6,7 @@ import { HowItWorks } from "./landing/HowItWorks.tsx";
 import { Landing } from "./landing/Landing.tsx";
 import { NotFound } from "./landing/NotFound.tsx";
 import { SendPage } from "./send/SendPage.tsx";
+import { SITE_ORIGIN } from "../shared/site-origin";
 
 /**
  * Routing by hand rather than with a router dependency.
@@ -21,7 +22,7 @@ import { SendPage } from "./send/SendPage.tsx";
  * `worker/lib/inbox.ts`.
  */
 function inboxName(): string | null {
-	const base = new URL(__SITE_ORIGIN__).hostname;
+	const base = new URL(SITE_ORIGIN).hostname;
 	const host = location.hostname;
 	if (host === base || host === `www.${base}`) return null;
 	if (!host.endsWith(`.${base}`)) return null;

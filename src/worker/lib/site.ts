@@ -1,3 +1,4 @@
+import { SITE_ORIGIN } from "../../shared/site-origin";
 import { NAME_RE } from "../limits";
 import { RESERVED_NAMES } from "./inbox";
 
@@ -9,13 +10,13 @@ import { RESERVED_NAMES } from "./inbox";
  *   ryan.stolnk.com            not an address — every link carries a path
  *   stolnk.com                 the marketing site, no inbox
  *
- * Everything that knows what an address looks like lives here. `PUBLIC_SITE_ORIGIN`
- * is the apex origin, scheme and port included, so `localhost:5173` in dev and
- * `stolnk.com` in production take exactly the same code path.
+ * Everything that knows what an address looks like lives here. `SITE_ORIGIN`
+ * carries scheme and port, so `localhost:5173` in dev and `stolnk.com` in
+ * production take exactly the same code path.
  */
 
-export function site(env: Env): { scheme: string; host: string; hostname: string } {
-	const url = new URL(env.PUBLIC_SITE_ORIGIN);
+export function site(): { scheme: string; host: string; hostname: string } {
+	const url = new URL(SITE_ORIGIN);
 	return { scheme: url.protocol.slice(0, -1), host: url.host, hostname: url.hostname };
 }
 
@@ -32,8 +33,8 @@ export function site(env: Env): { scheme: string; host: string; hostname: string
  * `*.stolnk.com` but nothing below it, so a nested name would have no
  * certificate at all.
  */
-export function nameFromHost(env: Env, requestUrl: string): string | null {
-	const base = site(env).hostname;
+export function nameFromHost(requestUrl: string): string | null {
+	const base = site().hostname;
 
 	// A trailing dot is a legal FQDN and would otherwise slip past the suffix
 	// test: `ryan.stolnk.com.` is the same host as `ryan.stolnk.com`.
@@ -49,7 +50,7 @@ export function nameFromHost(env: Env, requestUrl: string): string | null {
 }
 
 /** The public address of an inbox. `host` carries the port, so dev works unchanged. */
-export function inboxUrl(env: Env, name: string, slug: string): string {
-	const { scheme, host } = site(env);
+export function inboxUrl(name: string, slug: string): string {
+	const { scheme, host } = site();
 	return `${scheme}://${name}.${host}/${slug}`;
 }

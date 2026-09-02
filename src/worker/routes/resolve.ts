@@ -25,7 +25,7 @@ resolve.get("/", async (c) => {
 	// The name is the host this request arrived on. The send page is served from
 	// the inbox's own subdomain, so its fetch carries it with no help from the
 	// client — and nothing the client says can claim a different name.
-	const name = nameFromHost(c.env, c.req.url);
+	const name = nameFromHost(c.req.url);
 
 	// Uniform delay on every miss, so timing does not leak which names exist
 	// (PRD 13.1). A malformed slug is a miss too: a 400 would answer a question
@@ -66,7 +66,7 @@ resolve.get("/", async (c) => {
 		inbox_id: inbox.inbox_id,
 		name,
 		slug: inbox.path_slug,
-		url: inboxUrl(c.env, name, inbox.path_slug),
+		url: inboxUrl(name, inbox.path_slug),
 		display_name: inbox.display_name,
 		paused: !!inbox.paused,
 		online,

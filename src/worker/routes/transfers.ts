@@ -11,7 +11,7 @@ import {
 	tierForDevice,
 } from "../limits";
 import { randomId } from "../lib/bytes";
-import { hubFor } from "../lib/deviceauth";
+import { hubFor, pushInBackground } from "../lib/deviceauth";
 import {
 	badRequest,
 	clientIp,
@@ -170,6 +170,18 @@ transfers.post("/", async (c) => {
 	const senderIsOwner = body.via === "app" ? 1 : 0;
 	const expiresAt = now + tier.ttlHours * 60 * 60 * 1000;
 
+	// Signed before the first write, for the same reason registration is: it reads
+	// SESSION_SECRET and throws when that is unset, and a throw after the inserts
+	// would leave a transfer and its file rows behind that no caller ever got a
+	// token for. Every input to it is already known here.
+	const token = await signToken(c.env.SESSION_SECRET, {
+		t: "upload",
+		transfer: transferId,
+		inbox: inboxId,
+		session: senderSession,
+		exp: now + UPLOAD_TOKEN_TTL_MS,
+	});
+
 	await c.env.DB.prepare(
 		`INSERT INTO transfers (transfer_id, inbox_id, sender_session, state, total_bytes,
 		                        sender_is_owner, created_at, expires_at)
@@ -224,14 +236,6 @@ transfers.post("/", async (c) => {
 		bytes: totalBytes,
 		sender_is_owner: senderIsOwner === 1,
 		sub_inbox: inbox.path_slug !== null,
-	});
-
-	const token = await signToken(c.env.SESSION_SECRET, {
-		t: "upload",
-		transfer: transferId,
-		inbox: inboxId,
-		session: senderSession,
-		exp: now + UPLOAD_TOKEN_TTL_MS,
 	});
 
 	return c.json(
@@ -368,17 +372,28 @@ transfers.post("/:tid/files/:fid/complete", async (c) => {
 		)
 			.bind(owner.inbox_id, owner.sender_session)
 			.first();
-		try {
-			// Fire-and-forget: an asleep Mac simply finds it via /pending on waking.
+		const needsConfirmation = !!owner.confirm_first && !trusted;
+		// Outlives this response deliberately: an asleep Mac simply finds it via
+		// /pending on waking, but a Mac that is awake must not have to wait out a
+		// polling interval for something it could have been told about.
+		pushInBackground(c.executionCtx, () =>
 			hubFor(c.env, owner.device_id).notifyDevice({
 				type: "file.ready",
 				file_id: fileId,
 				transfer_id: transferId,
 				inbox_id: owner.inbox_id,
-				needs_confirmation: !!owner.confirm_first && !trusted,
-			});
-		} catch {
-			// Notification is an optimisation; /pending is the source of truth.
+				needs_confirmation: needsConfirmation,
+			}),
+		);
+		// "Uploaded" and "waiting on a person" are different things to be looking
+		// at, and only the sender can tell them apart from the copy.
+		if (needsConfirmation) {
+			pushInBackground(c.executionCtx, () =>
+				hubFor(c.env, owner.device_id).notifySender(transferId, {
+					type: "file.awaiting",
+					file_id: fileId,
+				}),
+			);
 		}
 	}
 

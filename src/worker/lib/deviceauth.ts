@@ -88,3 +88,34 @@ export async function requireDevice(env: Env, request: Request): Promise<string>
 export function hubFor(env: Env, deviceId: string) {
 	return env.HUB.get(env.HUB.idFromName(deviceId));
 }
+
+/**
+ * Sends a socket notification without making the caller wait for it.
+ *
+ * `hubFor(...).notifyDevice(...)` returns a promise, and a promise nobody holds
+ * is cancelled when the request context is torn down — so the plain
+ * fire-and-forget call this replaces was delivered only when the runtime
+ * happened to get to it first. That is why it worked under `wrangler dev` and
+ * dropped in production, where the file then waited out the Mac's polling
+ * interval and looked like nothing had happened at all.
+ *
+ * A surrounding `try/catch` cannot help either: the throw is a rejection, not a
+ * synchronous one. The `.catch` here is what actually swallows it, which is the
+ * intent — the socket is an optimisation and `/pending` remains the truth.
+ */
+export function pushInBackground(
+	// Structural, because Hono's `c.executionCtx` and the ambient
+	// `ExecutionContext` are not the same nominal type.
+	ctx: { waitUntil(promise: Promise<unknown>): void },
+	send: () => unknown,
+): void {
+	try {
+		ctx.waitUntil(Promise.resolve(send()).then(
+			() => undefined,
+			() => undefined,
+		));
+	} catch {
+		// No execution context (or the socket call threw synchronously). The Mac
+		// still finds the file on its next poll.
+	}
+}

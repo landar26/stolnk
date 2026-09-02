@@ -23,11 +23,11 @@ export const inboxes = new Hono<AppEnv>();
  * whole address. The name is not in the row — it belongs to the device — so it
  * is passed in, which is also what stops it from ever being stale.
  */
-export function present(env: Env, name: string, row: InboxRow) {
+export function present(name: string, row: InboxRow) {
 	return {
 		inbox_id: row.inbox_id,
 		slug: row.path_slug,
-		url: inboxUrl(env, name, row.path_slug),
+		url: inboxUrl(name, row.path_slug),
 		display_name: row.display_name,
 		paused: !!row.paused,
 		confirm_first: !!row.confirm_first,
@@ -62,7 +62,7 @@ inboxes.get("/", async (c) => {
 		.all<InboxRow>();
 	// The name rides along so a refresh keeps the displayed address prefix
 	// current without a second round trip.
-	return c.json({ name, inboxes: results.map((row) => present(c.env, name, row)) });
+	return c.json({ name, inboxes: results.map((row) => present(name, row)) });
 });
 
 /**
@@ -103,7 +103,7 @@ inboxes.post("/", async (c) => {
 	if (clash) return badRequest("That path is already in use.");
 
 	const row = await createInbox(c.env, { deviceId, slug, displayName });
-	return c.json(present(c.env, name, row), 201);
+	return c.json(present(name, row), 201);
 });
 
 inboxes.patch("/:id", async (c) => {
@@ -176,7 +176,7 @@ inboxes.patch("/:id", async (c) => {
 		.run();
 
 	const updated = await ownedInbox(c.env, deviceId, row.inbox_id);
-	return c.json(present(c.env, await nameOf(c.env, deviceId), updated));
+	return c.json(present(await nameOf(c.env, deviceId), updated));
 });
 
 /** A fresh salt for the client to derive against when setting a password. */
@@ -216,5 +216,5 @@ inboxes.post("/:id/reset", async (c) => {
 		.run();
 
 	const updated = await ownedInbox(c.env, deviceId, row.inbox_id);
-	return c.json(present(c.env, await nameOf(c.env, deviceId), updated));
+	return c.json(present(await nameOf(c.env, deviceId), updated));
 });

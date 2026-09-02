@@ -47,8 +47,5 @@
 	],
 	"triggers": {
 		"crons": ["*/30 * * * *"]
-	},
-	"vars": {
-		"PUBLIC_SITE_ORIGIN": "https://stolnk.com"
 	}
 }

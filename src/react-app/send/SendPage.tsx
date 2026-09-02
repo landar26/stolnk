@@ -43,6 +43,9 @@ export function SendPage({ slug }: { slug: string }) {
 	const [error, setError] = useState<string | null>(null);
 	const [files, setFiles] = useState<UploadProgress[]>([]);
 	const [delivered, setDelivered] = useState<Set<string>>(new Set());
+	/// PRD 13.2 — an inbox that confirms first parks the file on a person, not
+	/// on the network. "Uploaded" would be a lie about who is holding it up.
+	const [reception, setReception] = useState<Map<string, "awaiting" | "accepted">>(new Map());
 	const [resumable, setResumable] = useState<ResumeRecord[]>([]);
 	const [dragging, setDragging] = useState(false);
 
@@ -139,6 +142,14 @@ export function SendPage({ slug }: { slug: string }) {
 									}
 									if (event.type === "file.declined") {
 										setError("The recipient declined this transfer.");
+									}
+									if (
+										(event.type === "file.awaiting" || event.type === "file.accepted") &&
+										typeof event.file_id === "string"
+									) {
+										const id = event.file_id;
+										const phase = event.type === "file.awaiting" ? "awaiting" : "accepted";
+										setReception((current) => new Map(current).set(id, phase));
 									}
 								});
 							},
@@ -251,6 +262,9 @@ export function SendPage({ slug }: { slug: string }) {
 	const overall = totalBytes > 0 ? Math.min(1, sentBytes / totalBytes) : 0;
 	const allDelivered =
 		files.length > 0 && files.every((file) => file.fileId && delivered.has(file.fileId));
+	const awaitingConfirmation = files.some(
+		(file) => file.fileId && !delivered.has(file.fileId) && reception.has(file.fileId),
+	);
 
 	return (
 		<main className="page">
@@ -355,6 +369,7 @@ export function SendPage({ slug }: { slug: string }) {
 					<ul className="files">
 						{files.map((file, index) => {
 							const isDelivered = file.fileId ? delivered.has(file.fileId) : false;
+							const phase = file.fileId ? reception.get(file.fileId) : undefined;
 							const percent = file.size > 0 ? Math.round((file.sent / file.size) * 100) : 100;
 							return (
 								<li className="file" key={`${file.name}-${index}`}>
@@ -380,7 +395,11 @@ export function SendPage({ slug }: { slug: string }) {
 												: file.phase === "done"
 													? isDelivered
 														? "delivered"
-														: "waiting"
+														: phase === "accepted"
+															? "receiving"
+															: phase === "awaiting"
+																? "awaiting OK"
+																: "waiting"
 													: `${percent}%`}
 									</span>
 								</li>
@@ -416,6 +435,14 @@ export function SendPage({ slug }: { slug: string }) {
 								<p>
 									<strong>✓ Delivered</strong> to {inbox.display_name}.
 								</p>
+							) : awaitingConfirmation ? (
+								// Not a network delay — someone has to say yes. Saying "will be
+								// delivered when it comes online" here would send the sender
+								// looking for a fault that is not there.
+								<p>
+									<strong>✓ Uploaded.</strong> Waiting for {inbox.display_name} to accept it.
+									Expires in {inbox.ttl_hours} hours.
+								</p>
 							) : (
 								<p>
 									<strong>✓ Queued for delivery.</strong> Will be delivered when{" "}
@@ -431,6 +458,7 @@ export function SendPage({ slug }: { slug: string }) {
 								onClick={() => {
 									setFiles([]);
 									setDelivered(new Set());
+									setReception(new Map());
 									setError(null);
 									setScreen("ready");
 								}}

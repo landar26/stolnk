@@ -1,9 +1,9 @@
-# Copy to .dev.vars. Both keys are required for `npm run dev`.
+# Copy to .dev.vars, or run `npm run secrets:init` to generate one.
+#
+# SESSION_SECRET is the only value the Worker takes from the environment. The
+# apex origin is not here any more: it is a build-time constant in
+# src/shared/site-origin.ts, shared by the Worker and the browser bundle.
 
-# Signs device and upload tokens. Any long random string will do locally.
+# Signs device and upload tokens. Any long random string will do locally;
+# production gets its own, set with `npm run secrets:push`.
 SESSION_SECRET="dev-only-insecure-secret-do-not-use-in-production"
-
-# The apex origin the site is served from. Inbox links are <name>.<this host>,
-# so locally an inbox is at http://ryan.localhost:5173 (*.localhost resolves to
-# loopback with no /etc/hosts entry). Production lives in wrangler.json.
-PUBLIC_SITE_ORIGIN="http://localhost:5173"

@@ -630,6 +630,49 @@ if (socket.readyState === WebSocket.OPEN) {
 	check("Mac reports offline again after disconnect", offline.body.online === false);
 }
 
+/*
+ * PRD 10.5 — the push is the whole point of the design: without it a file
+ * waits out the Mac's polling interval, which looks exactly like "nothing
+ * happened". Presence passing is not evidence that notifications arrive; the
+ * socket can be connected and the frame still never sent.
+ */
+section("A ready file is pushed to a connected Mac (PRD 10.5)");
+{
+	const pushSocket = new WebSocket(`${BASE.replace("http", "ws")}/api/v1/ws/device?token=${token}`);
+	const opened = await new Promise<boolean>((resolve) => {
+		pushSocket.addEventListener("open", () => resolve(true));
+		pushSocket.addEventListener("error", () => resolve(false));
+		setTimeout(() => resolve(false), 5000);
+	});
+	check("device socket open for push", opened);
+
+	if (opened) {
+		const pushed = new Promise<any>((resolve) => {
+			pushSocket.addEventListener("message", (event) => {
+				try {
+					const frame = JSON.parse(String(event.data));
+					if (frame.type === "file.ready") resolve(frame);
+				} catch {
+					// Not our JSON.
+				}
+			});
+			setTimeout(() => resolve(null), 5000);
+		});
+
+		const root = await api(on(NAME, "/api/v1/resolve?slug=inbox"));
+		const push = await sendFile(root.body.inbox_id, kexPub, "pushed.txt", new Uint8Array([7]));
+		const frame = await pushed;
+
+		check("file.ready reached the Mac", !!frame, frame ? "" : "no frame within 5s");
+		if (frame) {
+			check("the push names the file that just completed", frame.file_id === push.fileId);
+			check("the push carries its transfer", frame.transfer_id === push.transferId);
+		}
+		await api(`/api/v1/files/${push.fileId}/ack`, { method: "POST", token });
+	}
+	pushSocket.close();
+}
+
 if (process.env.E2E_BIG === "1") {
 	section("Multi-part upload (65 MiB, exercises 64 MiB part boundaries)");
 	const big = new Uint8Array(65 * 1024 * 1024);

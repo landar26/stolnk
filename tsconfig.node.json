@@ -1,6 +1,8 @@
 {
 	"compilerOptions": {
 		"tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo",
+		/* vite.config.ts imports src/shared/site-origin.ts, which reads import.meta.env. */
+		"types": ["vite/client"],
 		"target": "ES2022",
 		"lib": ["ES2023"],
 		"module": "ESNext",

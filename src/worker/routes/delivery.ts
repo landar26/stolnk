@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { CHUNK_SIZE } from "../limits";
-import { hubFor, requireDevice } from "../lib/deviceauth";
+import { hubFor, pushInBackground, requireDevice } from "../lib/deviceauth";
 import { badRequest, notFound, readJson, type AppEnv } from "../lib/http";
 import { fileDelivered } from "../lib/metrics";
 
@@ -159,6 +159,15 @@ delivery.post("/files/:fid/accept", async (c) => {
 			.bind(file.inbox_id, file.sender_session, Date.now())
 			.run();
 	}
+
+	// Mirrors decline: without this the send page cannot distinguish "still
+	// waiting on a person" from "accepted, now downloading".
+	pushInBackground(c.executionCtx, () =>
+		hubFor(c.env, deviceId).notifySender(file.transfer_id, {
+			type: "file.accepted",
+			file_id: file.file_id,
+		}),
+	);
 	return c.json({ accepted: true });
 });
 
@@ -175,14 +184,12 @@ delivery.post("/files/:fid/decline", async (c) => {
 		.bind(file.file_id)
 		.run();
 
-	try {
+	pushInBackground(c.executionCtx, () =>
 		hubFor(c.env, deviceId).notifySender(file.transfer_id, {
 			type: "file.declined",
 			file_id: file.file_id,
-		});
-	} catch {
-		// The send page falls back to polling GET /transfers/:tid.
-	}
+		}),
+	);
 	return c.json({ declined: true });
 });
 
@@ -219,15 +226,13 @@ delivery.post("/files/:fid/ack", async (c) => {
 			.run();
 	}
 
-	try {
+	pushInBackground(c.executionCtx, () =>
 		hubFor(c.env, deviceId).notifySender(file.transfer_id, {
 			type: "file.delivered",
 			file_id: file.file_id,
 			transfer_complete: (remaining?.n ?? 0) === 0,
-		});
-	} catch {
-		// Polling fallback.
-	}
+		}),
+	);
 
 	return c.json({ delivered: true });
 });
