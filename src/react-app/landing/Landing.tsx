@@ -8,8 +8,8 @@ export function Landing() {
 					Share a link. Anyone can send you files — no account, no app. They land in the
 					right folder on your Mac, even when it's asleep.
 				</p>
-				<a href="/download">
-					<button className="primary">Download for Mac</button>
+				<a className="button primary" href="/download">
+					Download for Mac
 				</a>
 				<small>Free to start · macOS 13+</small>
 			</section>
@@ -84,7 +84,8 @@ export function Landing() {
 			</section>
 
 			<footer className="footer">
-				Stolnk · <a href="/how-it-works">How it works</a> · <a href="/pricing">Pricing</a>
+				Stolnk · <a href="/download">Download</a> ·{" "}
+				<a href="/how-it-works">How it works</a> · <a href="/pricing">Pricing</a>
 			</footer>
 		</>
 	);

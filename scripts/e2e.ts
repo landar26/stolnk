@@ -1302,6 +1302,145 @@ check(
 
 creem.close();
 
+/**
+ * PRD 10.1 — the installer is served from R2 through the Worker, so the site is
+ * the whole distribution channel and these are the checks that it works.
+ *
+ * Skipped wholesale when nothing has been published, which is the state of a
+ * fresh clone. `npm run release:mac -- --local --fake` seeds it and turns this
+ * section on.
+ */
+section("Installer download (PRD 10.1 — Developer ID, direct from the site)");
+const manifestResponse = await fetch(`${BASE}/api/v1/release/mac`);
+if (manifestResponse.status === 404) {
+	check("no macOS build published — download checks skipped", true);
+} else {
+	const manifest = (await manifestResponse.json()) as any;
+	check("the manifest is served", manifestResponse.status === 200);
+	check(
+		"it names a versioned universal dmg",
+		/^Stolnk-[0-9A-Za-z.+-]{1,32}-universal\.dmg$/.test(manifest.filename),
+		manifest.filename,
+	);
+	check("the hash is a SHA-256", /^[0-9a-f]{64}$/.test(manifest.sha256), manifest.sha256);
+	check("the size is real", manifest.size > 0, String(manifest.size));
+	check("it states the deployment target", manifest.min_macos === "13.0", manifest.min_macos);
+	check(
+		"the url is derived from the filename, not echoed",
+		manifest.url === `/download/mac/${manifest.filename}`,
+		manifest.url,
+	);
+
+	// Navigation headers, not a bare fetch. The static-asset layer runs ahead of
+	// the Worker and answers navigations that match no asset with index.html, so
+	// a plain fetch here passes while a real click on the button is served the
+	// SPA instead of the installer. `run_worker_first` in wrangler.json is what
+	// prevents that, and this is the check that notices if it is ever removed.
+	const asNavigation = {
+		accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+		"sec-fetch-mode": "navigate",
+		"sec-fetch-dest": "document",
+	};
+	const alias = await fetch(`${BASE}/download/mac`, {
+		redirect: "manual",
+		headers: asNavigation,
+	});
+	check(
+		"the stable alias redirects to the versioned file",
+		alias.status === 302 && alias.headers.get("location") === manifest.url,
+		`${alias.status} ${alias.headers.get("location")}`,
+	);
+	const navigated = await fetch(`${BASE}${manifest.url}`, { headers: asNavigation });
+	check(
+		"a browser navigation to the dmg gets the dmg, not the SPA",
+		navigated.status === 200 &&
+			navigated.headers.get("content-type") === "application/x-apple-diskimage",
+		`${navigated.status} ${navigated.headers.get("content-type")}`,
+	);
+	await navigated.arrayBuffer();
+	check(
+		"the alias is cached briefly, so a release is never stuck",
+		/max-age=300/.test(alias.headers.get("cache-control") ?? ""),
+		alias.headers.get("cache-control") ?? "",
+	);
+
+	const head = await fetch(`${BASE}${manifest.url}`, { method: "HEAD" });
+	const etag = head.headers.get("etag") ?? "";
+	check("the dmg is served", head.status === 200);
+	check(
+		"content-length matches the manifest",
+		Number(head.headers.get("content-length")) === manifest.size,
+		head.headers.get("content-length") ?? "",
+	);
+	check(
+		"it is typed as a disk image and marked as an attachment",
+		head.headers.get("content-type") === "application/x-apple-diskimage" &&
+			(head.headers.get("content-disposition") ?? "").includes(manifest.filename),
+	);
+	check(
+		"the versioned object is immutable",
+		/immutable/.test(head.headers.get("cache-control") ?? ""),
+		head.headers.get("cache-control") ?? "",
+	);
+	check("it advertises ranges and an etag", head.headers.get("accept-ranges") === "bytes" && !!etag);
+
+	// A plain GET must not come back 206: R2 populates `range` regardless of what
+	// the request asked for, and a 206 with no Range is how download managers get
+	// confused about whether they have the whole file.
+	const whole = await fetch(`${BASE}${manifest.url}`);
+	const wholeBytes = new Uint8Array(await whole.arrayBuffer());
+	check("an unconditional GET is 200, not 206", whole.status === 200, String(whole.status));
+
+	const first = await fetch(`${BASE}${manifest.url}`, { headers: { range: "bytes=0-15" } });
+	check(
+		"a range request is a 206 slice",
+		first.status === 206 &&
+			first.headers.get("content-range") === `bytes 0-15/${manifest.size}` &&
+			(await first.arrayBuffer()).byteLength === 16,
+	);
+	const suffix = await fetch(`${BASE}${manifest.url}`, { headers: { range: "bytes=-16" } });
+	check(
+		"the suffix form resumers send is honoured",
+		suffix.status === 206 &&
+			suffix.headers.get("content-range") === `bytes ${manifest.size - 16}-${manifest.size - 1}/${manifest.size}`,
+		suffix.headers.get("content-range") ?? String(suffix.status),
+	);
+	const past = await fetch(`${BASE}${manifest.url}`, { headers: { range: "bytes=99999999999-" } });
+	check(
+		"a range past the end is 416, not the whole file",
+		past.status === 416 && past.headers.get("content-range") === `bytes */${manifest.size}`,
+		`${past.status} ${past.headers.get("content-range")}`,
+	);
+	const conditional = await fetch(`${BASE}${manifest.url}`, { headers: { "if-none-match": etag } });
+	check("a matching etag is 304", conditional.status === 304, String(conditional.status));
+
+	// The check that actually protects the published-hash claim on the download
+	// page. Skipped for a real build, which is too big to be worth hashing here.
+	if (manifest.size <= 64 * 1024 * 1024) {
+		check(
+			"the bytes served hash to what the manifest promises",
+			toHex(new Uint8Array(await crypto.subtle.digest("SHA-256", wholeBytes))) ===
+				manifest.sha256,
+		);
+	} else {
+		check("build too large to hash in-suite — skipped", true);
+	}
+
+	for (const probe of ["latest.json", "evil.dmg", `${manifest.filename}.bak`]) {
+		const response = await fetch(`${BASE}/download/mac/${probe}`);
+		check(`/download/mac/${probe} is not reachable`, response.status === 404, String(response.status));
+	}
+
+	// The apex owns the marketing site; on an inbox subdomain these paths are not
+	// addresses, and the SPA answers instead.
+	const offApex = await fetch(on(NAME, "/api/v1/release/mac"));
+	check(
+		"the manifest is apex-only",
+		offApex.status === 404,
+		String(offApex.status),
+	);
+}
+
 console.log(`\n${passed} passed, ${failures.length} failed`);
 if (failures.length) {
 	for (const failure of failures) console.log(`  - ${failure}`);

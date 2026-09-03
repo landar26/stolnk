@@ -41,15 +41,17 @@
 		"db:ensure": "wrangler d1 info stolnk-db --json >/dev/null 2>&1 || wrangler d1 create stolnk-db",
 		"db:migrate": "wrangler d1 migrations apply DB --remote",
 		"db:migrate:local": "wrangler d1 migrations apply DB --local",
+		"r2:ensure": "wrangler r2 bucket info stolnk-releases >/dev/null 2>&1 || wrangler r2 bucket create stolnk-releases",
 		"secrets:init": "./scripts/secrets.sh init",
 		"secrets:check": "./scripts/secrets.sh check",
 		"secrets:push": "./scripts/secrets.sh push",
-		"deploy": "npm run db:ensure && npm run db:migrate && wrangler deploy",
+		"deploy": "npm run build && npm run db:ensure && npm run r2:ensure && npm run db:migrate && wrangler deploy",
 		"dev": "npm run db:migrate:local && vite",
 		"lint": "eslint .",
 		"preview": "npm run build && vite preview",
 		"e2e": "node --experimental-strip-types scripts/e2e.ts",
-		"vectors": "node --experimental-strip-types scripts/gen-vectors.ts"
+		"vectors": "node --experimental-strip-types scripts/gen-vectors.ts",
+		"release:mac": "node --experimental-strip-types scripts/release-mac.ts"
 	},
 	"type": "module"
 }

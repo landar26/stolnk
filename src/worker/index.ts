@@ -10,6 +10,7 @@ import { delivery } from "./routes/delivery";
 import { devices, names } from "./routes/devices";
 import { inboxes } from "./routes/inboxes";
 import { licenses } from "./routes/licenses";
+import { downloads, release } from "./routes/releases";
 import { resolve } from "./routes/resolve";
 import { transfers } from "./routes/transfers";
 import { webhooks } from "./routes/webhooks";
@@ -65,11 +66,16 @@ app.route("/api/v1/resolve", resolve);
 app.route("/api/v1/transfers", transfers);
 app.route("/api/v1/licenses", licenses);
 app.route("/api/v1/checkout", checkout);
+app.route("/api/v1/release", release);
 // Not under a device session, and deliberately outside the per-IP rate limits
 // that guard the rest: Creem retries with backoff, and throttling a webhook
 // turns a refund into one that silently never applies (PRD 16.5).
 app.route("/api/v1/webhooks", webhooks);
 app.route("/api/v1", delivery);
+// The installer (PRD 10.1). Not under /api/, so it has to be mounted before the
+// SPA fallback below; only /download/mac and /download/mac/<file> are claimed,
+// leaving bare /download to the page that links to them.
+app.route("/download", downloads);
 
 /**
  * Signalling. Tokens travel in the query string because the WebSocket handshake
@@ -128,6 +134,9 @@ app.onError((error, c) => {
 /**
  * PRD 8.5 — undelivered objects expire. Together with delete-on-ACK this is
  * what keeps average residency (and therefore storage cost) near zero.
+ *
+ * RELAY only. The RELEASES bucket holds published installers, which have no TTL
+ * and no row in D1 to find them by; nothing here should ever touch it.
  */
 async function sweep(env: Env): Promise<void> {
 	const now = Date.now();

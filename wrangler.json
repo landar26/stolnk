@@ -16,7 +16,8 @@
 	"assets": {
 		"directory": "./dist/client",
 		"binding": "ASSETS",
-		"not_found_handling": "single-page-application"
+		"not_found_handling": "single-page-application",
+		"run_worker_first": ["/download/*"]
 	},
 	"d1_databases": [
 		{
@@ -29,6 +30,10 @@
 		{
 			"binding": "RELAY",
 			"bucket_name": "stolnk-relay"
+		},
+		{
+			"binding": "RELEASES",
+			"bucket_name": "stolnk-releases"
 		}
 	],
 	"durable_objects": {

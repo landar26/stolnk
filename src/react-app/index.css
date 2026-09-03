@@ -299,6 +299,41 @@ button.primary {
 	color: #fff;
 }
 
+/*
+ * An anchor that has to look like a button. The download CTA is a real link so
+ * it still works with JavaScript off, and <a><button> — interactive content
+ * inside an anchor — is not valid HTML.
+ */
+a.button {
+	display: inline-block;
+	font: inherit;
+	font-size: 0.92rem;
+	padding: 8px 16px;
+	border-radius: 7px;
+	border: 1px solid var(--border);
+	background: var(--surface);
+	color: var(--text);
+	text-decoration: none;
+	cursor: pointer;
+}
+
+a.button:hover {
+	border-color: var(--accent);
+}
+
+a.button.primary {
+	background: var(--accent);
+	border-color: var(--accent);
+	color: #fff;
+}
+
+.download-meta {
+	display: block;
+	margin-top: 10px;
+	color: var(--text-dim);
+	font-size: 0.85rem;
+}
+
 button.link {
 	border: none;
 	background: none;
@@ -385,6 +420,12 @@ input[type="text"] {
 	white-space: pre;
 	overflow-x: auto;
 	color: var(--text-dim);
+}
+
+/* Right for a diagram, wrong for a 64-character hash on a phone. */
+.routing.wrap {
+	white-space: pre-wrap;
+	word-break: break-all;
 }
 
 .routing b {

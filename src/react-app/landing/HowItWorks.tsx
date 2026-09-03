@@ -73,7 +73,12 @@ export function HowItWorks() {
 				<li>Subresource Integrity on every script the send page loads.</li>
 				<li>A strict Content Security Policy with no inline scripts.</li>
 				<li>The sending code is open source and auditable.</li>
-				<li>Build artefact hashes are published so you can verify what you were served.</li>
+				<li>
+					The Mac app's hash is published on the{" "}
+					<a href="/download">download page</a>, so you can check the installer you got is
+					the one we shipped. The send page's own scripts are covered by the integrity
+					attributes above rather than by that hash.
+				</li>
 			</ul>
 			<p>
 				None of that turns the limitation into a guarantee. It narrows it. A file that must

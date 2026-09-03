@@ -51,8 +51,8 @@ export function Pricing() {
 						One inbox and 3 GB of relayed files a month. Enough to use properly, and
 						enough to see your Mac collect something it slept through.
 					</p>
-					<a href="/download">
-						<button>Download for Mac</button>
+					<a className="button" href="/download">
+						Download for Mac
 					</a>
 				</div>
 
