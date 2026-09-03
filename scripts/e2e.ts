@@ -1441,6 +1441,77 @@ if (manifestResponse.status === 404) {
 	);
 }
 
+section("Static site routing (the asset layer must never shadow the Worker)");
+/**
+ * The failure this section exists for is invisible to every other test in this
+ * file, because every other test uses a plain fetch.
+ *
+ * With static assets in front of the Worker, `not_found_handling:
+ * "single-page-application"` answers any *navigation* that matches no asset with
+ * `index.html` — so `/api/v1/checkout` returns a clean 302 to curl while a real
+ * click on "Buy Stolnk Pro" is served the SPA's 404 page. That is exactly what
+ * shipped: the button never worked, and a curl check said it did.
+ *
+ * `run_worker_first: true` is what stops it, and these are the checks that
+ * notice if it is ever weakened — including to the array form, which reads like
+ * an addition and is in fact an exclusive allow-list.
+ */
+const asNavigationRequest = {
+	accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+	"sec-fetch-mode": "navigate",
+	"sec-fetch-dest": "document",
+};
+
+const navHealth = await fetch(`${BASE}/api/v1/health`, { headers: asNavigationRequest });
+check(
+	"a navigation to an API path reaches the Worker, not the SPA",
+	(navHealth.headers.get("content-type") ?? "").includes("application/json"),
+	`${navHealth.status} ${navHealth.headers.get("content-type")}`,
+);
+
+const navCheckout = await fetch(`${BASE}/api/v1/checkout`, {
+	redirect: "manual",
+	headers: asNavigationRequest,
+});
+check(
+	"clicking Buy Stolnk Pro redirects to Creem",
+	navCheckout.status === 302 && /creem\.io/.test(navCheckout.headers.get("location") ?? ""),
+	`${navCheckout.status} ${navCheckout.headers.get("location")}`,
+);
+
+/*
+ * The other half of `run_worker_first: true`: the Worker now sees requests for
+ * real files, and a notFound that answers them with index.html serves the
+ * script as HTML and takes the site down. The tag is read out of the page
+ * rather than hard-coded, because the built name carries a content hash and the
+ * dev server serves the unbundled entry instead.
+ */
+const page = await fetch(`${BASE}/pricing`, { headers: asNavigationRequest });
+const html = await page.text();
+
+const entry = /<script[^>]+src="([^"]+\.(?:js|tsx))"/.exec(html)?.[1];
+check("the page references a script entry", !!entry, html.slice(0, 200));
+if (entry) {
+	const asset = await fetch(`${BASE}${entry}`);
+	const type = asset.headers.get("content-type") ?? "";
+	check(
+		"the script entry is served as JavaScript, not index.html",
+		asset.status === 200 && /javascript|ecmascript/.test(type),
+		`${asset.status} ${type}`,
+	);
+}
+
+// The security headers are skipped on localhost, where Vite needs inline
+// scripts (index.ts says so), so this one can only be asserted against a
+// deployed origin: E2E_BASE=https://stolnk.com npm run e2e.
+if (!/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|$)/.test(BASE)) {
+	check(
+		"the pricing page carries the CSP that PRD 9.4 rests on",
+		(page.headers.get("content-security-policy") ?? "").includes("default-src 'self'"),
+		page.headers.get("content-security-policy") ?? "(none)",
+	);
+}
+
 console.log(`\n${passed} passed, ${failures.length} failed`);
 if (failures.length) {
 	for (const failure of failures) console.log(`  - ${failure}`);

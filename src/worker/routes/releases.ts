@@ -30,14 +30,20 @@ import { nameFromHost } from "../lib/site";
  * 302 and not 301, for the reason `checkout.ts` gives about the discount code:
  * a permanent redirect would pin browsers to one version forever.
  *
- * These paths only reach this file because `wrangler.json` lists `/download/*`
- * in `run_worker_first`. The static-asset layer runs ahead of the Worker, and
- * `not_found_handling: "single-page-application"` makes it answer any
- * *navigation* that matches no asset with `index.html` — so without that entry
- * a browser clicking the download link is served the SPA and the Worker never
+ * These paths only reach this file because `wrangler.json` sets
+ * `run_worker_first: true`. Left to itself the static-asset layer runs ahead of
+ * the Worker, and `not_found_handling: "single-page-application"` makes it
+ * answer any *navigation* that matches no asset with `index.html` — so a
+ * browser clicking the download link is served the SPA and the Worker never
  * sees the request, while `curl` (not a navigation) gets the redirect and
- * everything looks fine. Removing it breaks the download button and nothing
- * else. The e2e suite sends `sec-fetch-mode: navigate` for exactly this reason.
+ * everything looks fine. That asymmetry is why the e2e suite sends
+ * `sec-fetch-mode: navigate`: without it the test passes on a broken button.
+ *
+ * The flag was briefly the array form, `["/download/*"]`, which reads like
+ * "and also run the Worker here" and is in fact the opposite: an array is an
+ * exclusive allow-list, so every path not in it — the whole of `/api/*` —
+ * stopped reaching the Worker at all. `true` is the only form that covers this
+ * route, the API, and the CSP the pages need (see `index.ts`'s notFound).
  *
  * Deliberately no `caches.default`. The Cache API refuses to store 206s, and
  * `cache.match()` ignores `Range` — so the obvious implementation returns a

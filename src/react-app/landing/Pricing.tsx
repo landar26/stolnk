@@ -65,8 +65,8 @@ export function Pricing() {
 						Launch price for the first 500. After that it is $39 — the long-term price,
 						not a discount that comes back.
 					</p>
-					<a href="/api/v1/checkout">
-						<button className="primary">Buy Stolnk Pro</button>
+					<a className="button primary" href="/api/v1/checkout">
+						Buy Stolnk Pro
 					</a>
 					<small>One payment. Yours permanently.</small>
 				</div>

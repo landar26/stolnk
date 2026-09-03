@@ -38,8 +38,8 @@ export function Thanks() {
 			</p>
 
 			<p style={{ margin: "24px 0" }}>
-				<a href="/download">
-					<button className="primary">Download for Mac</button>
+				<a className="button primary" href="/download">
+					Download for Mac
 				</a>
 			</p>
 

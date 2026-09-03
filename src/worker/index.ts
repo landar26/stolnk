@@ -116,13 +116,34 @@ app.get("/api/v1/ws/sender", async (c) => {
 	);
 });
 
+/**
+ * Everything the routes above did not claim, which under
+ * `run_worker_first: true` means the static site as well as unknown paths.
+ *
+ * **This handler and that flag are one change.** The flag exists so the CSP and
+ * HSTS middleware runs on the pages that need it most — PRD 9.4 makes that
+ * policy the mitigation for browser-delivered E2EE, and it cannot be applied to
+ * a response the Worker never sees. The cost is that real files arrive here
+ * too: `/assets/index-<hash>.js`, `/app-icon.png`. Answering those with
+ * `index.html`, as this did when the asset layer ran first, serves the bundle as
+ * HTML and takes the whole site down.
+ *
+ * So the request is forwarded at its own path rather than rewritten to
+ * `/index.html`. The binding's own `not_found_handling` is
+ * `single-page-application`, which means it returns the file when there is one
+ * and `index.html` when there is not — both of the answers needed here, and the
+ * reason this is shorter than what it replaced.
+ *
+ * GET regardless of the method that arrived: this is the last stop, and a POST
+ * to an unrouted path is still a request for a page.
+ */
 app.notFound(async (c) => {
 	if (c.req.path.startsWith("/api/")) {
 		return c.json({ error: "not_found", message: "No such endpoint." }, 404);
 	}
-	// Every other path is an inbox address (PRD 1.2) and is rendered by the SPA,
-	// which resolves it through /api/v1/resolve and shows its own 404.
-	return c.env.ASSETS.fetch(new Request(new URL("/index.html", c.req.url), { method: "GET" }));
+	// An inbox address (PRD 1.2) lands here as an asset miss and is rendered by
+	// the SPA, which resolves it through /api/v1/resolve and shows its own 404.
+	return c.env.ASSETS.fetch(new Request(new URL(c.req.url), { method: "GET" }));
 });
 
 app.onError((error, c) => {
