@@ -98,3 +98,20 @@ export function licenseReleased(fields: { seats_used: number }): void {
 export function licenseRevoked(fields: { reason: string; devices: number }): void {
 	emit("license.revoked", fields);
 }
+
+/**
+ * A refund arrived for an order this server cannot map to a licence.
+ *
+ * Louder than it looks: the refund route answers 200 to these (a non-2xx makes
+ * Creem retry forever over something that will never succeed), so this line is
+ * the only trace that money went back out and a seat did not. It fires for a
+ * purchase made before migration 0003 recorded order ids, and for any payload
+ * shape Creem changes underneath us.
+ */
+export function licenseRevokeUnmatched(fields: {
+	reason: string;
+	order_id: string | null;
+	checkout_id: string | null;
+}): void {
+	emit("license.revoke_unmatched", fields);
+}

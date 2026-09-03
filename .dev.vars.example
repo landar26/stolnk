@@ -3,8 +3,8 @@
 # The apex origin is not here: it is a build-time constant in
 # src/shared/site-origin.ts, shared by the Worker and the browser bundle.
 
-# Signs device and upload tokens. Any long random string will do locally;
-# production gets its own, set with `npm run secrets:push`.
+# Signs device and upload tokens. `npm run secrets:push` copies this exact value
+# to the Worker, so generate a strong unique value before pushing.
 SESSION_SECRET="dev-only-insecure-secret-do-not-use-in-production"
 
 # Licensing (PRD 16). In production these come from the Creem dashboard; here
@@ -16,5 +16,7 @@ SESSION_SECRET="dev-only-insecure-secret-do-not-use-in-production"
 # required to run the app.
 CREEM_API_KEY="dev"
 CREEM_API_BASE="http://127.0.0.1:5199"
+CREEM_CHECKOUT_BASE="https://www.creem.io/test/payment"
 CREEM_PRODUCT_ID="dev-product"
+CREEM_DISCOUNT_CODE=""
 CREEM_WEBHOOK_SECRET="dev-only-insecure-webhook-secret"

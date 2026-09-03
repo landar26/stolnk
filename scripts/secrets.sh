@@ -4,21 +4,18 @@
 #
 #   ./scripts/secrets.sh init    write a fresh .dev.vars for local development
 #   ./scripts/secrets.sh check   report which secrets production is missing
-#   ./scripts/secrets.sh push    set the missing ones on production
-#   ./scripts/secrets.sh push --rotate
-#                                replace them even if already set
+#   ./scripts/secrets.sh push    overwrite production values from .dev.vars
 #
-# There are two kinds. Generated secrets are made here and piped straight into
-# wrangler: the value is never printed, never written to a file for production,
-# and never pasted by hand. SESSION_SECRET is the only one — it signs session
-# tokens, so nothing needs a copy, and rotating it just makes every device
-# re-authenticate, which the Mac app does silently against its Secure Enclave
-# key.
+# There are two kinds. Generated secrets are created by `init` and stored only
+# in the git-ignored .dev.vars file. SESSION_SECRET is the only one — it signs
+# session tokens, and replacing it makes every device re-authenticate, which
+# the Mac app does silently against its Secure Enclave key.
 #
 # Supplied secrets come from somewhere else and cannot be invented: the Creem
-# pair is issued by Creem (PRD 16.5). `push` hands those to wrangler's own
-# prompt, so they are typed into wrangler and not into this script, a shell
-# history, or a file.
+# pair is issued by Creem (PRD 16.5). Local development keeps all Worker
+# configuration in the git-ignored .dev.vars file. `push` sends that file to
+# Wrangler's bulk secret endpoint so values never appear in command arguments
+# or this script's output.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -77,7 +74,9 @@ cmd_init() {
 		echo "# realistic thing to develop against."
 		echo "CREEM_API_KEY=\"dev\""
 		echo "CREEM_API_BASE=\"http://127.0.0.1:5199\""
+		echo "CREEM_CHECKOUT_BASE=\"https://www.creem.io/test/payment\""
 		echo "CREEM_PRODUCT_ID=\"dev-product\""
+		echo "CREEM_DISCOUNT_CODE=\"\""
 		echo "CREEM_WEBHOOK_SECRET=\"$(generate)\""
 	} > .dev.vars
 	echo "wrote .dev.vars — ${#GENERATED[@]} generated, ${#SUPPLIED[@]} to fill in by hand"
@@ -102,30 +101,15 @@ cmd_check() {
 }
 
 cmd_push() {
-	local rotate="${1:-}"
-	local present
-	present="$(remote_names)"
-	for name in "${SECRETS[@]}"; do
-		if grep -qx "$name" <<<"$present" && [ "$rotate" != "--rotate" ]; then
-			echo "  skip     $name (already set; pass --rotate to replace)"
-			continue
-		fi
-		if [[ " ${SUPPLIED[*]} " == *" $name "* ]]; then
-			local hint="from the Creem dashboard"
-			[[ " ${OPTIONAL[*]} " == *" $name "* ]] && hint="$hint; optional — Ctrl-C to skip"
-			# No pipe: wrangler prompts, so the value is never an argument to this
-			# script and never lands in shell history.
-			echo "  enter    $name ($hint)"
-			npx wrangler secret put "$name" >/dev/null || {
-				echo "  skipped  $name"
-				continue
-			}
-		else
-			# The value goes down the pipe and is never echoed.
-			generate | npx wrangler secret put "$name" >/dev/null
-		fi
-		echo "  pushed   $name"
-	done
+	if [ ! -f .dev.vars ]; then
+		echo ".dev.vars not found — create it before pushing secrets" >&2
+		exit 1
+	fi
+
+	# Wrangler accepts dotenv files directly. Every key in .dev.vars is created
+	# or overwritten in one request; remote keys absent from the file are kept.
+	npx wrangler secret bulk .dev.vars >/dev/null
+	echo "pushed all values from .dev.vars"
 	echo
 	echo "Secrets take effect immediately — no redeploy needed."
 }
@@ -133,9 +117,9 @@ cmd_push() {
 case "${1:-}" in
 	init) cmd_init ;;
 	check) cmd_check ;;
-	push) cmd_push "${2:-}" ;;
+	push) cmd_push ;;
 	*)
-		echo "usage: $0 {init|check|push [--rotate]}" >&2
+		echo "usage: $0 {init|check|push}" >&2
 		exit 2
 		;;
 esac

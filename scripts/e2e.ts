@@ -1166,9 +1166,22 @@ check(
 );
 
 section("Checkout webhook (Creem's current license_keys payload)");
+// Shaped as Creem actually sends it: the payload object *is* the checkout, so
+// its own `id` is the checkout id, and the order and customer hang off it. The
+// order id in particular is the only thing the refund below will have to go on.
+const ORDER_ID = `ord_e2e_${Math.random().toString(36).slice(2, 8)}`;
+const CHECKOUT_ID = `ch_e2e_${Math.random().toString(36).slice(2, 8)}`;
 const checkoutBody = JSON.stringify({
+	id: "evt_e2e_checkout",
 	eventType: "checkout.completed",
-	object: { license_keys: [{ key: GOOD_KEY }] },
+	object: {
+		id: CHECKOUT_ID,
+		object: "checkout",
+		status: "completed",
+		order: { id: ORDER_ID, object: "order", amount: 2900, currency: "USD" },
+		customer: { id: "cus_e2e", object: "customer", email: "e2e@example.com" },
+		license_keys: [{ id: "lic_e2e", key: GOOD_KEY, status: "active", activation_limit: 3 }],
+	},
 });
 const completedCheckout = await api("/api/v1/webhooks/creem", {
 	method: "POST",
@@ -1182,9 +1195,33 @@ check(
 );
 
 section("Refund webhook (PRD 16.5 — revocation is push, and never destructive)");
+/**
+ * A refund exactly as Creem sends one, which is the point of this whole
+ * section: the payload carries a refund, an order, a checkout and a customer,
+ * and **no licence key**. An earlier version of these tests put the key in
+ * `object.key`, a shape Creem does not produce, and so passed while revocation
+ * was in fact dead code. The row is found through the order id recorded at
+ * checkout (migration 0003), or it is not found at all.
+ */
+const refundFor = (order: string, checkout: string) =>
+	JSON.stringify({
+		id: "evt_e2e_refund",
+		eventType: "refund.created",
+		object: {
+			id: "ref_e2e",
+			object: "refund",
+			status: "succeeded",
+			refund_amount: 2900,
+			refund_currency: "USD",
+			order: { id: order, object: "order" },
+			checkout: { id: checkout, object: "checkout" },
+			customer: { id: "cus_e2e", object: "customer" },
+		},
+	});
+
 const unsigned = await api("/api/v1/webhooks/creem", {
 	method: "POST",
-	body: JSON.stringify({ eventType: "refund.created", object: { key: GOOD_KEY } }),
+	body: refundFor(ORDER_ID, CHECKOUT_ID),
 });
 check(
 	"an unsigned webhook is refused",
@@ -1194,7 +1231,7 @@ check(
 const forgedHook = await api("/api/v1/webhooks/creem", {
 	method: "POST",
 	headers: { "creem-signature": "0".repeat(64) },
-	body: JSON.stringify({ eventType: "refund.created", object: { key: GOOD_KEY } }),
+	body: refundFor(ORDER_ID, CHECKOUT_ID),
 });
 check("a forged signature is refused", forgedHook.status === 401, JSON.stringify(forgedHook.body));
 
@@ -1215,7 +1252,28 @@ const extra = await api("/api/v1/inboxes", {
 });
 check("Pro created a second inbox before the refund", extra.status === 201);
 
-const refundBody = JSON.stringify({ eventType: "refund.created", object: { key: GOOD_KEY } });
+// A refund for an order nobody bought. It must be accepted (a non-2xx makes
+// Creem retry it forever) and must revoke nothing — a lookup that matched too
+// broadly would take Pro away from a paying stranger.
+const strayBody = refundFor("ord_e2e_nobody", "ch_e2e_nobody");
+const stray = await api("/api/v1/webhooks/creem", {
+	method: "POST",
+	headers: { "creem-signature": await signWebhook(strayBody) },
+	body: strayBody,
+});
+check(
+	"a refund for an unknown order is accepted and ignored",
+	stray.status === 200 && stray.body.ignored === "refund.created",
+	JSON.stringify(stray.body),
+);
+const stillPro = await api("/api/v1/licenses/status", { token: refundToken });
+check(
+	"and it revoked nothing",
+	stillPro.body.tier === "pro",
+	JSON.stringify(stillPro.body),
+);
+
+const refundBody = refundFor(ORDER_ID, CHECKOUT_ID);
 const refunded = await api("/api/v1/webhooks/creem", {
 	method: "POST",
 	headers: { "creem-signature": await signWebhook(refundBody) },

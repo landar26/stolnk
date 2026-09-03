@@ -6,6 +6,7 @@ import { HowItWorks } from "./landing/HowItWorks.tsx";
 import { Landing } from "./landing/Landing.tsx";
 import { NotFound } from "./landing/NotFound.tsx";
 import { Pricing } from "./landing/Pricing.tsx";
+import { Thanks } from "./landing/Thanks.tsx";
 import { SendPage } from "./send/SendPage.tsx";
 import { SITE_ORIGIN } from "../shared/site-origin";
 
@@ -41,6 +42,8 @@ function Root() {
 	if (path === "how-it-works") return <HowItWorks />;
 	if (path === "download") return <Download />;
 	if (path === "pricing") return <Pricing />;
+	// Creem's return URL after checkout, and only reachable that way.
+	if (path === "thanks") return <Thanks />;
 	return <NotFound />;
 }
 
