@@ -3,6 +3,7 @@ import { HTTPException } from "hono/http-exception";
 import { hubFor } from "./lib/deviceauth";
 import { refundRelayBytes } from "./lib/entitlement";
 import { utcMonth, type AppEnv } from "./lib/http";
+import { TRANSFER_RECORD_TTL_MS } from "./limits";
 import { transferExpired } from "./lib/metrics";
 import { verifyToken, type DeviceToken, type UploadToken } from "./lib/tokens";
 import { checkout } from "./routes/checkout";
@@ -213,6 +214,55 @@ async function sweep(env: Env): Promise<void> {
 	)
 		.bind(now)
 		.run();
+
+	await forgetOldRecords(env, now);
+}
+
+/**
+ * Retention. Delete-on-ACK empties the bucket; this empties the table.
+ *
+ * The two were never the same thing, and until this existed only the first one
+ * happened: a delivered transfer's row — its size, its timestamps, its
+ * encrypted name, its wrapped key, the digest of its plaintext — stayed in D1
+ * for as long as the inbox did. Nothing read it. It was residue, and residue
+ * with a content hash in it is residue worth deleting on a schedule rather than
+ * when someone remembers to.
+ *
+ * Purely a D1 delete, and safely so: every terminal state releases its R2
+ * object at the moment it becomes terminal — `declined` and the ACK path in
+ * `routes/delivery.ts`, `abort` in `routes/transfers.ts`, and the loop above
+ * for `expired` — so there is no state this can reach in which an object is
+ * still parked. The cascade takes `files` and `file_parts` with the transfer.
+ *
+ * What it deliberately does not touch is `usage_daily` and `usage_monthly`.
+ * Those are accounting, keyed by inbox and by device rather than by transfer,
+ * and returning allowance because a record aged out would make forgetting a
+ * transfer the cheapest way to buy another 300 GB.
+ */
+async function forgetOldRecords(env: Env, now: number): Promise<void> {
+	const cutoff = now - TRANSFER_RECORD_TTL_MS;
+
+	// SQLite is not built with SQLITE_ENABLE_UPDATE_DELETE_LIMIT, so the batch
+	// size has to come from a subquery rather than a LIMIT on the DELETE. Same
+	// 500 as the expiry pass above: the cron runs every 30 minutes, and a sweep
+	// that cannot finish in one pass finishes in the next.
+	await env.DB.prepare(
+		`DELETE FROM transfers WHERE transfer_id IN (
+		   SELECT transfer_id FROM transfers
+		   WHERE state IN ('delivered', 'declined', 'aborted', 'expired')
+		     AND created_at < ?
+		   LIMIT 500
+		 )`,
+	)
+		.bind(cutoff)
+		.run();
+
+	// A remembered "always accept from this link" decision is keyed by the
+	// sender's session id, and that id lives in their `sessionStorage` — it is
+	// gone when they close the tab. A row older than the retention window can
+	// therefore never match another upload again, which makes it dead data
+	// rather than a preference we would be discarding.
+	await env.DB.prepare("DELETE FROM trusted_senders WHERE created_at < ?").bind(cutoff).run();
 }
 
 export default {

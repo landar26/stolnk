@@ -16,6 +16,12 @@
 	--text-dim: #6b6b66;
 	--accent: #2f6f4f;
 	--accent-soft: #e7f2ec;
+	/*
+	 * What reads on top of --accent. White works on the dark green used in
+	 * light mode and fails on the light green dark mode needs, so the pair has
+	 * to move together.
+	 */
+	--accent-fg: #ffffff;
 	--warn: #a8620f;
 	--danger: #a33232;
 	--radius: 10px;
@@ -34,6 +40,7 @@
 		--text-dim: #9b9b95;
 		--accent: #6fbf92;
 		--accent-soft: #1e2f26;
+		--accent-fg: #10201a;
 		--warn: #d99a4e;
 		--danger: #e08585;
 	}
@@ -74,8 +81,9 @@ code,
 	padding: 48px 24px 64px;
 }
 
+/* The comparison table needs more room than a column of prose does. */
 .wide {
-	max-width: 900px;
+	max-width: 1080px;
 }
 
 .card {
@@ -296,7 +304,7 @@ button:disabled {
 button.primary {
 	background: var(--accent);
 	border-color: var(--accent);
-	color: #fff;
+	color: var(--accent-fg);
 }
 
 /*
@@ -324,7 +332,7 @@ a.button:hover {
 a.button.primary {
 	background: var(--accent);
 	border-color: var(--accent);
-	color: #fff;
+	color: var(--accent-fg);
 }
 
 .download-meta {
@@ -366,47 +374,786 @@ input[type="text"] {
 	margin-top: 12px;
 }
 
-/* Landing page */
+/* ------------------------------------------------------------------ *
+ * The marketing site.
+ *
+ * Everything below is loaded by every page, including the send page, so it
+ * stays selector-based rather than utility-based: one stylesheet is cheaper
+ * than the machinery that would be needed to split it, and the CSP forbids the
+ * inline styles a utility framework would otherwise be avoiding.
+ * ------------------------------------------------------------------ */
+
+.shell {
+	max-width: 1080px;
+	margin: 0 auto;
+	padding: 0 24px;
+}
+
+/* A sticky header means every in-page anchor lands underneath it. */
+[id] {
+	scroll-margin-top: 76px;
+}
+
+html {
+	scroll-behavior: smooth;
+}
+
+/* Header */
+
+.site-header {
+	position: sticky;
+	top: 0;
+	z-index: 20;
+	background: color-mix(in srgb, var(--bg) 86%, transparent);
+	backdrop-filter: blur(12px);
+	border-bottom: 1px solid var(--border);
+}
+
+.site-header-inner {
+	max-width: 1080px;
+	margin: 0 auto;
+	padding: 0 24px;
+	min-height: 60px;
+	display: flex;
+	align-items: center;
+	gap: 20px;
+	flex-wrap: wrap;
+}
+
+.brand {
+	margin-right: auto;
+	font-size: 1.05rem;
+	font-weight: 600;
+	letter-spacing: -0.01em;
+	color: var(--text);
+	text-decoration: none;
+}
+
+.site-nav {
+	display: flex;
+	align-items: center;
+	gap: 24px;
+}
+
+.nav-links {
+	display: flex;
+	align-items: center;
+	gap: 20px;
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.nav-links a {
+	color: var(--text-dim);
+	text-decoration: none;
+	font-size: 0.92rem;
+}
+
+.nav-links a:hover,
+.nav-links a[aria-current="page"] {
+	color: var(--text);
+}
+
+.nav-actions {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+}
+
+/*
+ * Two languages, so the control names the one it switches *to*: a reader who
+ * cannot read the current language still has something they can act on.
+ */
+.lang-switch {
+	border-radius: 999px;
+	padding: 5px 12px;
+	font-size: 0.82rem;
+	color: var(--text-dim);
+}
+
+.lang-switch:hover:not(:disabled) {
+	color: var(--text);
+}
+
+.nav-toggle {
+	display: none;
+}
+
+.skip-link {
+	position: absolute;
+	left: -9999px;
+}
+
+.skip-link:focus {
+	left: 12px;
+	top: 10px;
+	z-index: 30;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: 7px;
+	padding: 8px 12px;
+}
+
+@media (max-width: 860px) {
+	.nav-toggle {
+		display: inline-block;
+	}
+
+	.site-nav {
+		display: none;
+		width: 100%;
+		flex-direction: column;
+		align-items: stretch;
+		gap: 16px;
+		padding-bottom: 20px;
+	}
+
+	.site-nav.open {
+		display: flex;
+	}
+
+	.nav-links {
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 13px;
+	}
+
+	.nav-actions {
+		justify-content: space-between;
+	}
+}
+
+/* Hero */
 
 .hero {
-	padding: 88px 24px 64px;
+	padding: 72px 0 60px;
 	text-align: center;
 }
 
-.hero h1 {
-	font-size: clamp(2rem, 5vw, 3rem);
-	line-height: 1.12;
-	margin: 0 0 20px;
-	letter-spacing: -0.02em;
-}
-
-.hero p {
-	font-size: 1.1rem;
+.hero-badge {
+	display: inline-block;
+	margin-bottom: 26px;
+	padding: 5px 14px;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	background: var(--surface);
 	color: var(--text-dim);
-	max-width: 520px;
-	margin: 0 auto 28px;
+	font-size: 0.8rem;
+	text-decoration: none;
 }
 
-.hero small {
+a.hero-badge:hover {
+	border-color: var(--accent);
+	color: var(--text);
+}
+
+.hero h1 {
+	font-size: clamp(2.1rem, 5.4vw, 3.4rem);
+	line-height: 1.08;
+	letter-spacing: -0.03em;
+	margin: 0 0 18px;
+}
+
+.hero-lede {
+	font-size: 1.12rem;
+	color: var(--text-dim);
+	max-width: 560px;
+	margin: 0 auto 30px;
+}
+
+.hero-meta {
 	display: block;
-	margin-top: 12px;
+	margin-top: 14px;
 	color: var(--text-dim);
 	font-size: 0.85rem;
 }
 
-.panel {
-	padding: 56px 24px;
+.hero-figure {
+	max-width: 520px;
+	margin: 56px auto 0;
+}
+
+a.button.large {
+	font-size: 1rem;
+	padding: 12px 26px;
+	border-radius: 9px;
+}
+
+/* Section furniture */
+
+.scenarios,
+.showcase,
+.features,
+.roadmap,
+.pricing-teaser,
+.faq {
+	padding: 76px 0;
 	border-top: 1px solid var(--border);
 }
 
-.panel h2 {
-	font-size: 1.4rem;
-	margin: 0 0 12px;
+.section-head,
+.showcase-head {
+	max-width: 640px;
+	margin: 0 0 34px;
 }
 
-.panel p {
+.section-head h2,
+.showcase-head h2 {
+	font-size: clamp(1.5rem, 3vw, 2.1rem);
+	line-height: 1.15;
+	letter-spacing: -0.025em;
+	margin: 0 0 10px;
+}
+
+.section-head p,
+.showcase-head p {
 	color: var(--text-dim);
+	margin: 0;
+}
+
+.showcase-link {
+	margin-top: 14px;
+}
+
+.showcase-body {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+	gap: 40px;
+	align-items: start;
+}
+
+@media (max-width: 900px) {
+	.showcase-body {
+		grid-template-columns: 1fr;
+		gap: 32px;
+	}
+}
+
+.cards {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: grid;
+	gap: 20px;
+}
+
+.card-item h3 {
+	margin: 0 0 5px;
+	font-size: 1rem;
+}
+
+.card-item p {
+	margin: 0;
+	color: var(--text-dim);
+	font-size: 0.94rem;
+}
+
+/* Scenario switcher */
+
+.scenario-tabs {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+	gap: 12px;
+	margin-bottom: 30px;
+}
+
+.scenario-tab {
+	display: block;
+	text-align: left;
+	padding: 16px 18px;
+	border-radius: var(--radius);
+	line-height: 1.4;
+}
+
+.scenario-tab.active {
+	border-color: var(--accent);
+	background: var(--accent-soft);
+}
+
+.scenario-n {
+	display: block;
+	font-family: var(--mono);
+	font-size: 0.74rem;
+	letter-spacing: 0.09em;
+	color: var(--text-dim);
+}
+
+.scenario-name {
+	display: block;
+	margin-top: 7px;
+	font-weight: 600;
+}
+
+.scenario-note {
+	display: block;
+	margin-top: 4px;
+	font-size: 0.85rem;
+	color: var(--text-dim);
+}
+
+.scenario-panel {
+	display: flex;
+	justify-content: center;
+}
+
+.scenario-panel .figure {
+	max-width: 520px;
+	animation: figure-in 0.32s ease;
+}
+
+@keyframes figure-in {
+	from {
+		opacity: 0;
+		transform: translateY(6px);
+	}
+}
+
+/* Diagrams */
+
+.figure {
+	width: 100%;
+	margin: 0;
+	padding: 26px 22px;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	font-family: var(--mono);
+	font-size: 0.86rem;
+	color: var(--text-dim);
+	text-align: center;
+}
+
+.figure-line {
+	overflow-wrap: anywhere;
+}
+
+.figure-target b {
+	color: var(--text);
+	font-weight: 600;
+}
+
+.figure-meta {
+	font-size: 0.78rem;
+	margin-bottom: 12px;
+}
+
+/*
+ * The travelling dot. `--fall` is the distance, so the short variant used in
+ * the encryption diagram shares one keyframe with the tall one.
+ */
+.figure-pipe {
+	--fall: 34px;
+	position: relative;
+	width: 1px;
+	height: 44px;
+	margin: 12px auto;
+	background: var(--border);
+}
+
+.figure-pipe.short {
+	--fall: 20px;
+	height: 30px;
+}
+
+.figure-pipe::after {
+	content: "";
+	position: absolute;
+	left: 50%;
+	bottom: 0;
+	width: 6px;
+	height: 6px;
+	border-right: 1px solid var(--border);
+	border-bottom: 1px solid var(--border);
+	transform: translateX(-50%) rotate(45deg);
+}
+
+.figure-dot {
+	position: absolute;
+	left: 50%;
+	top: 0;
+	width: 7px;
+	height: 7px;
+	margin-left: -3px;
+	border-radius: 50%;
+	background: var(--accent);
+	opacity: 0;
+	animation: fall 2.8s ease-in-out infinite;
+}
+
+@keyframes fall {
+	0% {
+		transform: translateY(0);
+		opacity: 0;
+	}
+	14% {
+		opacity: 1;
+	}
+	62% {
+		transform: translateY(var(--fall));
+		opacity: 1;
+	}
+	74%,
+	100% {
+		transform: translateY(var(--fall));
+		opacity: 0;
+	}
+}
+
+.figure-caption {
+	margin-top: 14px;
+	color: var(--text-dim);
+	font-size: 0.88rem;
+	font-family: var(--font);
+}
+
+.figure-slot {
+	display: flex;
+}
+
+/* Two words sharing one grid cell, so nothing moves as they crossfade. */
+
+.swap {
+	display: inline-grid;
+	text-align: left;
+}
+
+.swap > * {
+	grid-area: 1 / 1;
+}
+
+.swap-a {
+	opacity: 1;
+	animation: swap-out 5.2s ease-in-out infinite;
+}
+
+.swap-b {
+	opacity: 0;
+	animation: swap-in 5.2s ease-in-out infinite;
+}
+
+@keyframes swap-out {
+	0%,
+	42% {
+		opacity: 1;
+	}
+	50%,
+	92% {
+		opacity: 0;
+	}
+	100% {
+		opacity: 1;
+	}
+}
+
+@keyframes swap-in {
+	0%,
+	42% {
+		opacity: 0;
+	}
+	50%,
+	92% {
+		opacity: 1;
+	}
+	100% {
+		opacity: 0;
+	}
+}
+
+/* The sleep queue */
+
+.sleep-figure,
+.crypto-figure {
+	text-align: left;
+}
+
+.sleep-state {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	margin-bottom: 16px;
+	font-size: 0.82rem;
+}
+
+.sleep-figure .dot {
+	animation: wake 5.2s ease-in-out infinite;
+}
+
+@keyframes wake {
+	0%,
+	42% {
+		background: transparent;
+		border-color: var(--text-dim);
+	}
+	50%,
+	92% {
+		background: var(--accent);
+		border-color: var(--accent);
+	}
+	100% {
+		background: transparent;
+		border-color: var(--text-dim);
+	}
+}
+
+.queue {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.queue-item {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 14px;
+	padding: 10px 0;
+	border-bottom: 1px solid var(--border);
+	font-size: 0.82rem;
+}
+
+.queue-item:last-child {
+	border-bottom: none;
+}
+
+.queue-name {
+	color: var(--text);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.queue-state {
+	flex: none;
+}
+
+/* They land one after another rather than all at once. */
+.queue-item-2 .swap > * {
+	animation-delay: 0.18s;
+}
+
+.queue-item-3 .swap > * {
+	animation-delay: 0.36s;
+}
+
+.crypto-panel {
+	padding: 14px 16px;
+	border: 1px dashed var(--border);
+	border-radius: 7px;
+	background: var(--surface-2);
+}
+
+/* Feature grid */
+
+.feature-grid {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(238px, 1fr));
+	gap: 1px;
+	background: var(--border);
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	overflow: hidden;
+}
+
+.feature {
+	background: var(--surface);
+	padding: 22px 20px;
+}
+
+.feature h3 {
+	margin: 0 0 6px;
+	font-size: 0.97rem;
+}
+
+.feature p {
+	margin: 0;
+	color: var(--text-dim);
+	font-size: 0.9rem;
+}
+
+/* Roadmap */
+
+.roadmap-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	max-width: 720px;
+}
+
+.roadmap-list li {
+	position: relative;
+	padding: 14px 0 14px 30px;
+	border-bottom: 1px solid var(--border);
+	color: var(--text-dim);
+}
+
+.roadmap-list li::before {
+	content: "→";
+	position: absolute;
+	left: 0;
+	color: var(--accent);
+}
+
+.roadmap-list li:last-child {
+	border-bottom: none;
+}
+
+/* FAQ */
+
+.faq-list {
+	max-width: 760px;
+	border-top: 1px solid var(--border);
+}
+
+.faq-item {
+	border-bottom: 1px solid var(--border);
+}
+
+.faq-item summary {
+	display: flex;
+	justify-content: space-between;
+	gap: 18px;
+	padding: 17px 0;
+	cursor: pointer;
+	font-weight: 500;
+	list-style: none;
+}
+
+.faq-item summary::-webkit-details-marker {
+	display: none;
+}
+
+.faq-item summary::after {
+	content: "+";
+	flex: none;
+	color: var(--text-dim);
+}
+
+.faq-item[open] summary::after {
+	content: "−";
+}
+
+.faq-item p {
+	margin: 0 0 20px;
+	max-width: 62ch;
+	color: var(--text-dim);
+}
+
+/* Closing call to action */
+
+.cta-band {
+	padding: 68px 0;
+	border-top: 1px solid var(--border);
+	background: var(--surface-2);
+}
+
+.cta-inner {
+	display: flex;
+	align-items: flex-end;
+	justify-content: space-between;
+	gap: 28px;
+	flex-wrap: wrap;
+}
+
+.cta-inner h2 {
+	font-size: clamp(1.6rem, 3.4vw, 2.4rem);
+	line-height: 1.1;
+	letter-spacing: -0.03em;
+	margin: 0 0 10px;
+}
+
+.cta-inner p {
+	margin: 0;
+	max-width: 520px;
+	color: var(--text-dim);
+}
+
+/* Footer */
+
+.site-footer {
+	border-top: 1px solid var(--border);
+}
+
+.footer-inner {
+	max-width: 1080px;
+	margin: 0 auto;
+	padding: 48px 24px 44px;
+}
+
+.footer-cols {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+	gap: 28px;
+	padding-bottom: 32px;
+	border-bottom: 1px solid var(--border);
+}
+
+.footer-heading {
 	margin: 0 0 12px;
+	font-size: 0.78rem;
+	font-weight: 600;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--text-dim);
+}
+
+.footer-links {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: grid;
+	gap: 9px;
+}
+
+.footer-links a {
+	color: var(--text-dim);
+	text-decoration: none;
+	font-size: 0.9rem;
+}
+
+.footer-links a:hover {
+	color: var(--text);
+}
+
+.footer-legal {
+	margin: 24px 0 0;
+	color: var(--text-dim);
+	font-size: 0.82rem;
+}
+
+/* Prose pages */
+
+.prose h2 {
+	font-size: 1.25rem;
+	margin: 36px 0 10px;
+}
+
+.prose h3 {
+	font-size: 1rem;
+	margin: 24px 0 6px;
+}
+
+.prose p,
+.prose li {
+	color: var(--text-dim);
+}
+
+.prose strong {
+	color: var(--text);
+}
+
+.page-cta {
+	margin: 24px 0;
+}
+
+/* The first thing anyone auditing a policy looks for. */
+.legal-updated {
+	margin: -4px 0 20px;
+	font-size: 0.85rem;
+	color: var(--text-dim);
 }
 
 .routing {
@@ -433,47 +1180,6 @@ input[type="text"] {
 	font-weight: 600;
 }
 
-.steps {
-	margin: 0;
-	padding-left: 22px;
-	color: var(--text-dim);
-}
-
-.steps li {
-	margin-bottom: 8px;
-}
-
-.steps li b {
-	color: var(--text);
-}
-
-.prose h2 {
-	font-size: 1.25rem;
-	margin: 36px 0 10px;
-}
-
-.prose h3 {
-	font-size: 1rem;
-	margin: 24px 0 6px;
-}
-
-.prose p,
-.prose li {
-	color: var(--text-dim);
-}
-
-.prose strong {
-	color: var(--text);
-}
-
-.footer {
-	padding: 32px 24px 56px;
-	text-align: center;
-	color: var(--text-dim);
-	font-size: 0.86rem;
-	border-top: 1px solid var(--border);
-}
-
 /* Pricing (PRD 16.1) */
 
 .plans {
@@ -495,7 +1201,8 @@ input[type="text"] {
 	background: var(--accent-soft);
 }
 
-.plan h2 {
+.plan h2,
+.plan h3 {
 	margin: 0;
 	font-size: 1rem;
 	letter-spacing: 0.04em;
@@ -530,6 +1237,17 @@ input[type="text"] {
 	color: var(--text-dim);
 }
 
+/* Comparison tables, on /pricing and /compare */
+
+.table-scroll {
+	overflow-x: auto;
+	margin-bottom: 10px;
+}
+
+.table-scroll .compare {
+	min-width: 760px;
+}
+
 .compare {
 	width: 100%;
 	border-collapse: collapse;
@@ -556,9 +1274,49 @@ input[type="text"] {
 .compare tbody th {
 	font-weight: 400;
 	color: var(--text-dim);
-	width: 40%;
+	width: 22%;
 }
 
 .compare td {
+	color: var(--text-dim);
+}
+
+.compare td.compare-own {
 	color: var(--text);
+}
+
+.compare-note {
+	text-align: left;
+}
+
+/*
+ * Every animation on this site is decoration on top of a diagram that already
+ * reads. Switched off, each one stops at its *end* state — the Mac awake, the
+ * files landed, the filename encrypted — because that is the state the
+ * surrounding copy is describing.
+ */
+@media (prefers-reduced-motion: reduce) {
+	html {
+		scroll-behavior: auto;
+	}
+
+	.figure-dot,
+	.sleep-figure .dot,
+	.scenario-panel .figure,
+	.swap > * {
+		animation: none;
+	}
+
+	.sleep-figure .dot {
+		background: var(--accent);
+		border-color: var(--accent);
+	}
+
+	.swap-a {
+		opacity: 0;
+	}
+
+	.swap-b {
+		opacity: 1;
+	}
 }

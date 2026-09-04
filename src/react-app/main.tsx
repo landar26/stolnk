@@ -1,12 +1,6 @@
-import { StrictMode } from "react";
+import { StrictMode, Suspense, lazy } from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
-import { Download } from "./landing/Download.tsx";
-import { HowItWorks } from "./landing/HowItWorks.tsx";
-import { Landing } from "./landing/Landing.tsx";
-import { NotFound } from "./landing/NotFound.tsx";
-import { Pricing } from "./landing/Pricing.tsx";
-import { Thanks } from "./landing/Thanks.tsx";
 import { SendPage } from "./send/SendPage.tsx";
 import { SITE_ORIGIN } from "../shared/site-origin";
 
@@ -31,6 +25,16 @@ function inboxName(): string | null {
 	return host.slice(0, -(base.length + 1));
 }
 
+/**
+ * The same PRD 9.4 argument, one step further: the marketing pages carry two
+ * languages of copy and a page's worth of sections that the send page has no
+ * use for. `SendPage` stays a static import because it is the latency-sensitive
+ * half; the apex can afford a second round trip.
+ */
+const Marketing = lazy(() =>
+	import("./landing/Marketing.tsx").then((module) => ({ default: module.Marketing })),
+);
+
 function Root() {
 	const path = location.pathname.replace(/^\/+|\/+$/g, "");
 
@@ -38,13 +42,13 @@ function Root() {
 	// 404 and the send page already knows how to say so.
 	if (inboxName() !== null) return <SendPage slug={path} />;
 
-	if (path === "") return <Landing />;
-	if (path === "how-it-works") return <HowItWorks />;
-	if (path === "download") return <Download />;
-	if (path === "pricing") return <Pricing />;
-	// Creem's return URL after checkout, and only reachable that way.
-	if (path === "thanks") return <Thanks />;
-	return <NotFound />;
+	// No fallback: the chunk resolves in a frame or two on a warm cache, and a
+	// spinner that flashes for one frame is worse than nothing appearing yet.
+	return (
+		<Suspense fallback={null}>
+			<Marketing path={path} />
+		</Suspense>
+	);
 }
 
 createRoot(document.getElementById("root")!).render(

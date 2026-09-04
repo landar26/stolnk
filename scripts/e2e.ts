@@ -771,6 +771,85 @@ check("object gone immediately after ACK", !(await r2ObjectExists(r2Key)));
 const afterAck = await api("/api/v1/pending", { token });
 check("nothing left pending", afterAck.body.files.length === 0);
 
+section("Retention (a record can be forgotten without giving up the address)");
+// The state here is exactly the one that matters: one transfer just delivered,
+// nothing pending, and an inbox whose address the owner wants to keep.
+const usedBeforeClear = (await api("/api/v1/licenses/status", { token })).body
+	.relay_used as number;
+
+// Something still in flight, to prove the clear leaves it alone. Declared and
+// never uploaded, so it sits in 'uploading' with an object parked for it.
+const inFlight = await api("/api/v1/transfers", {
+	method: "POST",
+	body: JSON.stringify({
+		inbox_id: inboxId,
+		files: [
+			{
+				enc_name: "x",
+				name_iv: "x",
+				size: 1024,
+				nonce_prefix: "x",
+				wrapped_key: "x",
+				key_iv: "x",
+				eph_pub: "x",
+			},
+		],
+	}),
+});
+check("a second transfer is in flight", inFlight.status === 201, JSON.stringify(inFlight.body));
+
+const cleared = await api(`/api/v1/inboxes/${inboxId}/transfers`, { method: "DELETE", token });
+check(
+	"clearing reports what it forgot",
+	cleared.status === 200 && cleared.body.cleared >= 1,
+	JSON.stringify(cleared.body),
+);
+
+const clearedAgain = await api(`/api/v1/inboxes/${inboxId}/transfers`, { method: "DELETE", token });
+check(
+	"a second clear finds nothing left — the delivered record is really gone",
+	clearedAgain.status === 200 && clearedAgain.body.cleared === 0,
+	JSON.stringify(clearedAgain.body),
+);
+
+const stillThere = await api(`/api/v1/transfers/${inFlight.body.transfer_id}`, {
+	token: inFlight.body.token,
+});
+check(
+	"the in-flight transfer survives — its ciphertext is still parked",
+	stillThere.status === 200 && stillThere.body.state === "uploading",
+	`${stillThere.status} ${JSON.stringify(stillThere.body)}`,
+);
+
+const usedAfterClear = (await api("/api/v1/licenses/status", { token })).body
+	.relay_used as number;
+check(
+	"clearing records does not hand back relay bytes",
+	usedAfterClear === usedBeforeClear,
+	`${usedBeforeClear} -> ${usedAfterClear}`,
+);
+
+const stillResolves = await api(on(NAME, "/api/v1/resolve?slug=inbox"));
+check(
+	"the inbox and its address are untouched — this is the whole difference from delete",
+	stillResolves.status === 200 && stillResolves.body.inbox_id === inboxId,
+	JSON.stringify(stillResolves.body),
+);
+
+const outsider = await register(`${NAME}-x`.slice(0, 20), await makeDevice());
+const notYours = await api(`/api/v1/inboxes/${inboxId}/transfers`, {
+	method: "DELETE",
+	token: outsider.body.token as string,
+});
+check("another device cannot clear this inbox's records", notYours.status === 404, `${notYours.status}`);
+
+// Put it back the way the rest of the suite expects it: nothing parked, nothing
+// booked against the month.
+await api(`/api/v1/transfers/${inFlight.body.transfer_id}/abort`, {
+	method: "POST",
+	token: inFlight.body.token,
+});
+
 section("Tamper detection (PRD 9.3 — no half files)");
 const vectors = JSON.parse(
 	readFileSync(new URL("../../testdata/vectors.json", import.meta.url), "utf8"),

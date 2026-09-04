@@ -83,6 +83,25 @@ export const NAME_RE = /^[a-z0-9][a-z0-9-]{1,18}[a-z0-9]$/;
 /** 6.2 — sub-inbox path segment. */
 export const SLUG_RE = /^[a-z0-9-]{1,32}$/;
 
+/**
+ * How long a finished transfer's metadata row survives.
+ *
+ * The ciphertext is already gone by then — every terminal state releases its R2
+ * object at the moment it becomes terminal — so what this expires is the row:
+ * size, timestamps, the encrypted name, the wrapped key, the plaintext digest.
+ * Nothing reads those rows once the transfer is over; the pending list and the
+ * quota check both filter on `('uploading', 'ready')`, and there is no history
+ * feature for them to feed.
+ *
+ * It is not shorter because the sender's own status poll reads the transfer row
+ * (`routes/transfers.ts`), and a row deleted out from under a page someone
+ * still has open turns "Delivered" into a 404.
+ *
+ * This number is a published promise, not a tuning knob: /privacy states it.
+ * Changing it here means changing `landing/copy-legal.tsx` in both languages.
+ */
+export const TRANSFER_RECORD_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
 /** Device auth challenge lifetime. */
 export const CHALLENGE_TTL_MS = 5 * 60 * 1000;
 /** Device session token lifetime. */

@@ -211,6 +211,48 @@ inboxes.delete("/:id", async (c) => {
 });
 
 /**
+ * Forget this inbox's finished transfers, and keep the inbox.
+ *
+ * The distinction from `DELETE /:id` is the whole reason this exists. Deleting
+ * an inbox also clears its records, but it gives up the address to do it —
+ * so anyone who wanted to clear a history had to hand back the link they had
+ * given people. Reset was no help either: it rotates the path and leaves every
+ * row where it was.
+ *
+ * **In-flight transfers are left alone.** `uploading` and `ready` both mean
+ * ciphertext is parked in R2 and a sender is waiting on an answer; deleting
+ * those rows would orphan the object and turn the sender's page into a 404.
+ * That is exactly the difference from deleting the inbox, which does take them
+ * — and is why the Mac confirms that one.
+ *
+ * Nothing here touches `usage_daily` or `usage_monthly`. Clearing a record must
+ * not return allowance, or it becomes a way to buy relay bytes for free.
+ */
+inboxes.delete("/:id/transfers", async (c) => {
+	const deviceId = await requireDevice(c.env, c.req.raw);
+	const row = await ownedInbox(c.env, deviceId, c.req.param("id"));
+
+	// Counted before rather than read off `meta.changes` afterwards: D1 reports
+	// the cascade too, so a single transfer carrying one file comes back as two.
+	// The Mac puts this number in front of the user — "cleared 2 records" for one
+	// file is a small lie, and it is the only feedback the action gives.
+	const TERMINAL = "('delivered', 'declined', 'aborted', 'expired')";
+	const counted = await c.env.DB.prepare(
+		`SELECT count(*) AS n FROM transfers WHERE inbox_id = ? AND state IN ${TERMINAL}`,
+	)
+		.bind(row.inbox_id)
+		.first<{ n: number }>();
+
+	await c.env.DB.prepare(
+		`DELETE FROM transfers WHERE inbox_id = ? AND state IN ${TERMINAL}`,
+	)
+		.bind(row.inbox_id)
+		.run();
+
+	return c.json({ cleared: counted?.n ?? 0 });
+});
+
+/**
  * PRD 6.3 — Reset gives up this inbox's address and takes a new one. The old
  * URL 404s immediately: the point is to cut off whoever has the link, so unlike
  * a rename there is no grace period.

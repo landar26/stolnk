@@ -1,6 +1,25 @@
 -- Stolnk V1 schema.
--- PRD 7.3: the server never stores local paths, plaintext filenames,
--- file contents, or content hashes usable for tracking.
+--
+-- PRD 7.3 lists four things the server never stores: local paths, plaintext
+-- filenames, file contents, and content hashes usable for tracking. The first
+-- three hold — nothing below records any of them, and there is no column a
+-- local path could arrive in.
+--
+-- The fourth does not. `files.plain_sha256` is the SHA-256 of the file's
+-- decrypted contents, and that is a content hash usable for tracking: it says
+-- nothing about what a file holds, but anyone already in possession of a copy
+-- can use it to test whether that same file passed through here.
+--
+-- It is stored knowingly rather than by oversight. The receiving Mac verifies
+-- the bytes it decrypted against it before the file lands
+-- (`StolnkCore/Receiver.swift`), so removing the column means removing that
+-- end-to-end check. The consequence is disclosed on /privacy instead of being
+-- left implied.
+--
+-- So this is an open divergence, not a settled design: either the check moves
+-- somewhere that does not need the digest at rest, or PRD 7.3 is amended to
+-- admit it. Until one of those happens, this comment is the record of which
+-- way it currently goes.
 
 -- 6.1: `name` is a DNS label and the whole identity — a link lives at
 -- <name>.stolnk.com. UNIQUE is the one-name-per-device rule itself rather
@@ -68,6 +87,8 @@ CREATE INDEX idx_transfers_inbox ON transfers (inbox_id);
 CREATE INDEX idx_transfers_expiry ON transfers (expires_at);
 
 -- enc_name is the AES-GCM ciphertext of the filename: the server cannot read it.
+-- plain_sha256 is the one column that is readable and derived from the plaintext;
+-- the header comment says why it is here and what it costs.
 CREATE TABLE files (
   file_id      TEXT PRIMARY KEY,
   transfer_id  TEXT NOT NULL,
