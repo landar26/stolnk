@@ -49,6 +49,13 @@ const en = {
 		lede: "Share a link. Anyone can send you files — no account, no app. They land in the right folder on your Mac, even when it's asleep.",
 		cta: "Download for Mac",
 		meta: "Free to start · macOS 13+",
+		/*
+		 * Said in the hero rather than left to be discovered. A Windows reader who
+		 * gets as far as the download page before finding out leaves annoyed; one
+		 * who is told in the first screen either leaves an address or leaves
+		 * quickly, and both of those are better outcomes than the first.
+		 */
+		windows: "On Windows? Get told when it lands →",
 		figureFrom: "ryan.stolnk.com/client-a",
 		figureTo: "~/Projects/ClientA/Incoming",
 		figureCaption: "One link. One folder. Nothing in between to check.",
@@ -200,6 +207,24 @@ const en = {
 			"A webhook when a file lands",
 			"Dropping a whole folder into the send page",
 		],
+	},
+
+	/*
+	 * The promise in `doneBody` is deliberately narrow, and the endpoint is built
+	 * to keep it: one table, no marketing list, nothing joined to it. An address
+	 * given for a single announcement should not turn into a mailing list, and
+	 * saying so plainly is also the only reason a stranger types one in.
+	 */
+	waitlist: {
+		title: "Not on a Mac?",
+		lede: "Stolnk is macOS only today. The receiving half has to run on the machine the files land on, and that half does not exist for Windows yet — so rather than a date, here is a way to hear about it first.",
+		placeholder: "you@example.com",
+		cta: "Notify me",
+		sending: "Sending…",
+		doneTitle: "You're on the list.",
+		doneBody: "One email, on the day a Windows build ships. Nothing else, ever.",
+		failed: "That did not go through. Check the address and try again.",
+		tooMany: "Too many tries just now. Give it a minute.",
 	},
 
 	pricingTeaser: {
@@ -380,6 +405,7 @@ const zh: Dict = {
 		lede: "分享一条链接，任何人都能给你发文件——不用注册，不用装 App。文件会落进你 Mac 上指定的那个文件夹，哪怕它正在睡觉。",
 		cta: "下载 Mac 版",
 		meta: "免费开始 · 需要 macOS 13+",
+		windows: "用 Windows？做好了第一时间通知你 →",
 		figureFrom: "ryan.stolnk.com/client-a",
 		figureTo: "~/Projects/ClientA/Incoming",
 		figureCaption: "一条链接，一个文件夹，中间没有需要你去查看的环节。",
@@ -531,6 +557,18 @@ const zh: Dict = {
 			"文件落盘时触发 webhook",
 			"在发送页里直接拖入整个文件夹",
 		],
+	},
+
+	waitlist: {
+		title: "不用 Mac？",
+		lede: "Stolnk 目前只有 macOS 版。接收的那一半必须跑在文件最终落地的那台机器上，而这一半在 Windows 上还不存在——与其给一个做不准的日期，不如给你一个第一时间知道的方式。",
+		placeholder: "you@example.com",
+		cta: "通知我",
+		sending: "提交中…",
+		doneTitle: "已经记下了。",
+		doneBody: "Windows 版发布那天给你发一封邮件。除此之外不会再有别的。",
+		failed: "没提交成功，检查一下地址再试一次。",
+		tooMany: "刚才试得太频繁了，过一分钟再来。",
 	},
 
 	pricingTeaser: {

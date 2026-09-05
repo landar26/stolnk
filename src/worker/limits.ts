@@ -130,6 +130,12 @@ export const RATE_MAX_PARTS = 600;
  */
 export const RATE_MAX_LICENSE = 20;
 
+/**
+ * The Windows waiting list. A person signs up once, so the only caller who
+ * needs more than a couple a minute is someone stuffing the table.
+ */
+export const RATE_MAX_WAITLIST = 5;
+
 /** Ciphertext length for a given plaintext length under the chunk framing. */
 export function cipherSizeFor(plainSize: number): number {
 	const chunks = Math.max(1, Math.ceil(plainSize / CHUNK_SIZE));

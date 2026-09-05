@@ -31,6 +31,9 @@ export function Hero() {
 					{t.hero.cta}
 				</a>
 				<small className="hero-meta">{t.hero.meta}</small>
+				<small className="hero-meta">
+					<a href="/download#windows">{t.hero.windows}</a>
+				</small>
 
 				<div className="hero-figure">
 					<RoutingFigure from={t.hero.figureFrom} to={t.hero.figureTo} />

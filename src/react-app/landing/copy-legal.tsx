@@ -133,6 +133,17 @@ export const legalEn = {
 									about a minute and written nowhere by us
 								</td>
 							</tr>
+							<tr>
+								<th scope="row">
+									An email address, if you ask to hear about a Windows build
+								</th>
+								<td>Sending you that one announcement, and nothing else</td>
+								<td>
+									Your consent, which you can withdraw by writing to us. Stored on its
+									own, linked to no device, licence or transfer, and deleted once the
+									announcement has gone out or you ask us to
+								</td>
+							</tr>
 						</tbody>
 					</table>
 				</div>
@@ -615,6 +626,13 @@ export const legalZh: typeof legalEn = {
 								<th scope="row">IP 地址</th>
 								<td>限流，避免单个客户端把服务打满</td>
 								<td>基于我们维持服务可用的正当利益。在内存中保留约一分钟，我们不写入任何地方</td>
+							</tr>
+							<tr>
+								<th scope="row">邮箱地址，如果你要求在 Windows 版发布时收到通知</th>
+								<td>只用来发这一封通知，没有别的用途</td>
+								<td>
+									基于你的同意，你可以随时写信撤回。单独存放，不与任何设备、授权或传输记录关联；通知发出后即删除，你要求删除时也删除
+								</td>
 							</tr>
 						</tbody>
 					</table>

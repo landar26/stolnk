@@ -15,6 +15,7 @@ import { licenses } from "./routes/licenses";
 import { downloads, release } from "./routes/releases";
 import { resolve } from "./routes/resolve";
 import { transfers } from "./routes/transfers";
+import { waitlist } from "./routes/waitlist";
 import { webhooks } from "./routes/webhooks";
 
 export { DeviceHub } from "./do/DeviceHub";
@@ -100,6 +101,7 @@ app.route("/api/v1/transfers", transfers);
 app.route("/api/v1/licenses", licenses);
 app.route("/api/v1/checkout", checkout);
 app.route("/api/v1/release", release);
+app.route("/api/v1/waitlist", waitlist);
 // Not under a device session, and deliberately outside the per-IP rate limits
 // that guard the rest: Creem retries with backoff, and throttling a webhook
 // turns a refund into one that silently never applies (PRD 16.5).

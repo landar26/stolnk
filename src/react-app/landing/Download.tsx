@@ -1,6 +1,7 @@
 import { formatBytes } from "../lib/format.ts";
 import { useLang } from "./lang-context.ts";
 import { useMacRelease } from "./useMacRelease.ts";
+import { WaitlistForm } from "./WaitlistForm.tsx";
 
 /**
  * PRD 19 risk #7 — Gatekeeper friction on first launch is a real drop-off
@@ -62,6 +63,16 @@ export function Download() {
 
 			<h2>{copy.onYourMac}</h2>
 			{copy.onYourMacBody}
+
+			{/*
+			 * Last on the page on purpose. Someone who came here to download a Mac
+			 * app should not have to scroll past a form for a platform they are not
+			 * on — but the hero links straight to this anchor, so a Windows reader
+			 * never has to find it by scrolling either.
+			 */}
+			<h2 id="windows">{t.waitlist.title}</h2>
+			<p>{t.waitlist.lede}</p>
+			<WaitlistForm />
 		</main>
 	);
 }

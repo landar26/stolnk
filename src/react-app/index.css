@@ -367,6 +367,7 @@ button.link {
 }
 
 input[type="password"],
+input[type="email"],
 input[type="text"] {
 	font: inherit;
 	padding: 8px 11px;
