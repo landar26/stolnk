@@ -1,0 +1,45 @@
+# The deployed Worker, selling for real. Copy to .prod.vars and fill in the two
+# secret values from Creem's dashboard, with the store in LIVE mode.
+#
+# This file exists because .dev.vars cannot serve both purposes. Local
+# development has to point at the stub Creem that `npm run e2e` starts;
+# production has to point at the real one. One file expressing both is how
+# https://www.creem.io/test/payment ended up as the live buy button.
+#
+# `npm run secrets:push` reads .prod.vars, and this file always means live. To
+# point the deployed Worker at Creem's test store instead, put that store's
+# values in .dev.vars and run `npm run secrets:push -- test` — which sends the
+# CREEM_ keys from that file and nothing else.
+
+# Signs device and upload tokens. Rotating it makes every device
+# re-authenticate, which the Mac app does silently against its Secure Enclave
+# key; the cost is that an upload in flight at that moment fails.
+SESSION_SECRET=""
+
+# Creem, LIVE mode (PRD 16.5). Test-mode values start `creem_test_` and belong
+# in .dev.vars, not here.
+#
+# Deliberately absent: CREEM_API_BASE and CREEM_CHECKOUT_BASE. Unset, the code
+# falls back to https://api.creem.io and https://www.creem.io/payment — live
+# mode is the absence of them, not a value. Setting either one here points the
+# buy button at a test store, so `secrets.sh push` refuses this file outright if
+# it mentions them; test mode is a different file and a spelled-out `push test`.
+# The same push also deletes them from the Worker, because `wrangler secret bulk`
+# never removes a key and leaving them out of this file is not on its own enough.
+
+# Settings -> API 密钥 -> "Stolnk production backend"
+CREEM_API_KEY=""
+
+# Settings -> 网络钩子 -> "Stolnk production" -> 签名密钥 -> 显示
+# The endpoint is https://stolnk.com/api/v1/webhooks/creem, subscribed to
+# checkout.completed, refund.created and dispute.created.
+CREEM_WEBHOOK_SECRET=""
+
+# Not secrets — the buyer reads both off the checkout URL. They live here
+# because `wrangler types` gives a var the literal type of its value, so an
+# unset one types as `""` and every `if (!env.X)` guard becomes statically dead.
+CREEM_PRODUCT_ID="prod_7CPd9t5d7oc2s278IOdLyJ"
+
+# Optional. The early-bird run (PRD 16.1): $10 off $39, capped at 500
+# redemptions by Creem, so selling out needs no deploy. Unset means full price.
+CREEM_DISCOUNT_CODE="LAUNCH29"

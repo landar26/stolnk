@@ -3,8 +3,10 @@
 # The apex origin is not here: it is a build-time constant in
 # src/shared/site-origin.ts, shared by the Worker and the browser bundle.
 
-# Signs device and upload tokens. `npm run secrets:push` copies this exact value
-# to the Worker, so generate a strong unique value before pushing.
+# Signs device and upload tokens. Local only: the Worker's copy comes from
+# .prod.vars, and `secrets.sh` filters this line out of `push test` on purpose,
+# so that switching payment modes cannot re-authenticate every device in the
+# field as a side effect.
 SESSION_SECRET="dev-only-insecure-secret-do-not-use-in-production"
 
 # Licensing (PRD 16). In production these come from the Creem dashboard; here
@@ -14,6 +16,32 @@ SESSION_SECRET="dev-only-insecure-secret-do-not-use-in-production"
 # With the stub not running, activation fails with 503 and every device behaves
 # as Free — a realistic state to develop against, and the reason none of this is
 # required to run the app.
+#
+# THESE SIX LINES HAVE A SECOND JOB. `npm run secrets:push -- test` sends them —
+# and only them, never SESSION_SECRET — to the deployed Worker, which is how
+# stolnk.com is put in test payment mode. So they describe one of two things at
+# a time:
+#
+#   the stub, as written below, for local development; or
+#   Creem's own test store, for `push test`:
+#
+#     CREEM_API_KEY="creem_test_..."           dashboard in test mode
+#     CREEM_API_BASE="https://test-api.creem.io"
+#     CREEM_PRODUCT_ID="prod_..."              the test store's own product, a
+#                                              different record than the live one
+#     CREEM_WEBHOOK_SECRET="..."               test webhooks are signed differently
+#     CREEM_DISCOUNT_CODE=""                   the live early-bird code does not
+#                                              exist in the test store
+#
+# Test-store products carry their own Return URL, and it starts out blank. If it
+# is blank, a completed test payment stops on Creem's own confirmation page and
+# never comes back to /thanks — the redirect is Creem's setting, not something
+# this codebase sends (see routes/checkout.ts).
+#
+# Not both, and `push test` refuses the first: a Worker runs on Cloudflare's
+# edge and cannot fetch 127.0.0.1, so pushing the stub's address would leave a
+# checkout that takes test cards in front of an activation endpoint that 503s
+# every one of them. `rm .dev.vars && npm run secrets:init` puts the stub back.
 CREEM_API_KEY="dev"
 CREEM_API_BASE="http://127.0.0.1:5199"
 CREEM_CHECKOUT_BASE="https://www.creem.io/test/payment"

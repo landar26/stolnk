@@ -45,6 +45,8 @@
 		"secrets:init": "./scripts/secrets.sh init",
 		"secrets:check": "./scripts/secrets.sh check",
 		"secrets:push": "./scripts/secrets.sh push",
+		"secrets:verify": "./scripts/secrets.sh verify",
+		"secrets:mode": "./scripts/secrets.sh mode",
 		"deploy": "npm run build && npm run db:ensure && npm run r2:ensure && npm run db:migrate && wrangler deploy",
 		"dev": "npm run db:migrate:local && vite",
 		"lint": "eslint .",
