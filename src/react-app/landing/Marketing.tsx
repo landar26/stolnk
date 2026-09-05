@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Compare } from "./Compare.tsx";
 import { Download } from "./Download.tsx";
 import { HowItWorks } from "./HowItWorks.tsx";
@@ -21,6 +22,8 @@ import { LangProvider } from "./lang.tsx";
  * that true as the marketing side grows.
  */
 export function Marketing({ path }: { path: string }) {
+	useAnchorOnLoad();
+
 	return (
 		<LangProvider>
 			<SiteHeader />
@@ -28,6 +31,30 @@ export function Marketing({ path }: { path: string }) {
 			<SiteFooter />
 		</LangProvider>
 	);
+}
+
+/**
+ * Land on the section a `/#faq` link asked for.
+ *
+ * The browser resolves a hash against the document it has, and on a cold load
+ * that document is an empty root: this module is a lazy chunk, so by the time
+ * `#faq` exists the browser has long since decided there was nothing to scroll
+ * to. Every anchor in the header and footer is an absolute `/#…`, which means
+ * arriving from any other page hit this — the link worked and simply did
+ * nothing.
+ *
+ * Runs after the first paint of the page's own content, since that is when the
+ * target exists. The `scroll-margin-top` on `[id]` keeps it clear of the
+ * header, so this does no arithmetic of its own.
+ */
+function useAnchorOnLoad(): void {
+	useEffect(() => {
+		const id = location.hash.slice(1);
+		if (!id) return;
+		// `getElementById` rather than a selector: a hash is arbitrary text, and a
+		// malformed one should be the no-op it always was, not a thrown error.
+		document.getElementById(id)?.scrollIntoView();
+	}, []);
 }
 
 function Page({ path }: { path: string }) {

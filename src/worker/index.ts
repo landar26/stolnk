@@ -5,6 +5,7 @@ import { refundRelayBytes } from "./lib/entitlement";
 import { utcMonth, type AppEnv } from "./lib/http";
 import { TRANSFER_RECORD_TTL_MS } from "./limits";
 import { transferExpired } from "./lib/metrics";
+import { isInboxHost, rewriteInboxPreview } from "./lib/preview";
 import { verifyToken, type DeviceToken, type UploadToken } from "./lib/tokens";
 import { checkout } from "./routes/checkout";
 import { delivery } from "./routes/delivery";
@@ -57,9 +58,40 @@ app.use("*", async (c, next) => {
 	}
 	c.header("x-content-type-options", "nosniff");
 	c.header("referrer-policy", "no-referrer");
+
+	/*
+	 * An inbox address is handed to one person, and it stays private only for as
+	 * long as nobody publishes it. Somebody eventually will — in a public issue,
+	 * a forum post, a screenshot — and from there a crawler finds it. This is the
+	 * difference between that link being known to whoever was given it and being
+	 * a search result.
+	 *
+	 * Deliberately a header and not `Disallow: /` in robots.txt, which would be
+	 * the blunter version of the same idea and would also stop the unfurlers that
+	 * do read it: an inbox link pasted into a chat should still show what it is,
+	 * since the recipient deciding whether to trust it is the whole reason the
+	 * send page has preview tags at all. `noindex` is a search directive; the
+	 * preview fetchers ignore it. That split is the one we want.
+	 */
+	if (isInboxHost(c.req.url)) c.header("x-robots-tag", "noindex, nofollow");
 });
 
 app.get("/api/v1/health", (c) => c.json({ ok: true }));
+
+/*
+ * Without this the SPA fallback answers robots.txt with `index.html`, and a
+ * crawler reading HTML where it expected directives treats the site as having
+ * no rules at all.
+ */
+app.get("/robots.txt", (c) =>
+	c.text(
+		isInboxHost(c.req.url)
+			? // The pages are already `noindex` by the header above. Crawling is left
+				// open on purpose so that unfurling still works.
+				"User-agent: *\nAllow: /\n"
+			: "User-agent: *\nAllow: /\n",
+	),
+);
 app.route("/api/v1/devices", devices);
 app.route("/api/v1/inboxes", inboxes);
 app.route("/api/v1/names", names);
@@ -144,7 +176,13 @@ app.notFound(async (c) => {
 	}
 	// An inbox address (PRD 1.2) lands here as an asset miss and is rendered by
 	// the SPA, which resolves it through /api/v1/resolve and shows its own 404.
-	return c.env.ASSETS.fetch(new Request(new URL(c.req.url), { method: "GET" }));
+	const asset = await c.env.ASSETS.fetch(new Request(new URL(c.req.url), { method: "GET" }));
+
+	// The one thing the SPA cannot do for itself: a crawler building a link
+	// preview does not run the bundle, so the tags it reads are whatever the
+	// static `index.html` shipped. On an inbox subdomain those are the wrong
+	// half of the product, and this is the only place left to say so.
+	return isInboxHost(c.req.url) ? rewriteInboxPreview(asset, c.req.url) : asset;
 });
 
 app.onError((error, c) => {

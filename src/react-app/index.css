@@ -139,7 +139,16 @@ code,
 	transition: border-color 0.15s, background 0.15s;
 }
 
-.drop:hover,
+/* `.active` is the dragging state, so it belongs to pointers that can drag.
+   Hover is gated with it: a touch browser keeps the last-tapped element in
+   :hover, which left the drop zone stuck green after the file picker closed. */
+@media (hover: hover) {
+	.drop:hover {
+		border-color: var(--accent);
+		background: var(--accent-soft);
+	}
+}
+
 .drop.active {
 	border-color: var(--accent);
 	background: var(--accent-soft);
@@ -391,7 +400,7 @@ input[type="text"] {
 
 /* A sticky header means every in-page anchor lands underneath it. */
 [id] {
-	scroll-margin-top: 76px;
+	scroll-margin-top: 88px;
 }
 
 html {
@@ -413,7 +422,7 @@ html {
 	max-width: 1080px;
 	margin: 0 auto;
 	padding: 0 24px;
-	min-height: 60px;
+	min-height: 72px;
 	display: flex;
 	align-items: center;
 	gap: 20px;
@@ -421,7 +430,9 @@ html {
 }
 
 .brand {
-	margin-right: auto;
+	display: inline-flex;
+	align-items: center;
+	gap: 9px;
 	font-size: 1.05rem;
 	font-weight: 600;
 	letter-spacing: -0.01em;
@@ -429,36 +440,66 @@ html {
 	text-decoration: none;
 }
 
+/* The app icon is a full-bleed square; the radius is what makes it read as an
+   icon next to the wordmark rather than as a cropped photo. */
+.brand-mark {
+	width: 28px;
+	height: 28px;
+	border-radius: 7px;
+	flex: none;
+}
+
 .site-nav {
+	flex: 1;
 	display: flex;
 	align-items: center;
 	gap: 24px;
 }
 
 .nav-links {
+	flex: 1;
 	display: flex;
 	align-items: center;
-	gap: 20px;
+	justify-content: center;
+	gap: 4px;
 	list-style: none;
 	margin: 0;
 	padding: 0;
 }
 
+/* Padded rather than bare text: at 4px apart they need their own bounds, and
+   it turns each one into a target rather than a word. */
 .nav-links a {
+	display: block;
+	padding: 8px 12px;
+	border-radius: 6px;
 	color: var(--text-dim);
 	text-decoration: none;
-	font-size: 0.92rem;
+	font-size: 0.875rem;
+	font-weight: 500;
 }
 
 .nav-links a:hover,
 .nav-links a[aria-current="page"] {
 	color: var(--text);
+	background: var(--surface-2);
 }
 
 .nav-actions {
 	display: flex;
 	align-items: center;
-	gap: 12px;
+	gap: 8px;
+}
+
+/* The bar's controls share one height, so the row reads as a row. */
+.nav-actions .button {
+	padding: 0 20px;
+	min-height: 40px;
+	display: inline-flex;
+	align-items: center;
+	border-radius: 10px;
+	font-size: 0.875rem;
+	font-weight: 600;
 }
 
 /*
@@ -466,13 +507,38 @@ html {
  * cannot read the current language still has something they can act on.
  */
 .lang-switch {
-	border-radius: 999px;
-	padding: 5px 12px;
+	min-width: 40px;
+	min-height: 40px;
+	border-radius: 10px;
+	padding: 0 12px;
 	font-size: 0.82rem;
 	color: var(--text-dim);
 }
 
 .lang-switch:hover:not(:disabled) {
+	color: var(--text);
+}
+
+/* Icon-only, so it borrows the same dim-to-solid treatment as .lang-switch. */
+.nav-discord {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	/* A 40x40 box like the controls either side of it, which is also a hit area
+	   the 20x15 glyph could never provide on its own. */
+	width: 40px;
+	height: 40px;
+	border-radius: 10px;
+	color: var(--text-dim);
+}
+
+.nav-discord svg {
+	width: 20px;
+	height: 15px;
+	fill: currentColor;
+}
+
+.nav-discord:hover {
 	color: var(--text);
 }
 
@@ -514,13 +580,31 @@ html {
 	}
 
 	.nav-links {
+		flex: none;
 		flex-direction: column;
 		align-items: flex-start;
-		gap: 13px;
+		justify-content: flex-start;
+		gap: 4px;
+	}
+
+	/* Left edges line up with the wordmark above them. */
+	.nav-links a {
+		padding-left: 0;
+		padding-right: 0;
+		font-size: 0.95rem;
+	}
+
+	.nav-links a:hover,
+	.nav-links a[aria-current="page"] {
+		background: none;
 	}
 
 	.nav-actions {
 		justify-content: space-between;
+	}
+
+	.site-nav {
+		flex: none;
 	}
 }
 

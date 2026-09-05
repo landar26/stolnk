@@ -1,4 +1,11 @@
-import { COMPANY_EN, COMPANY_ZH, SUPPORT_EMAIL } from "./contact.ts";
+import {
+	COMPANY_EN,
+	COMPANY_ZH,
+	DISCORD_URL,
+	SUPPORT_EMAIL,
+	X_HANDLE,
+	X_URL,
+} from "./contact.ts";
 import { legalEn, legalZh } from "./copy-legal.tsx";
 import { pagesEn, pagesZh } from "./copy-pages.tsx";
 
@@ -32,6 +39,7 @@ const en = {
 			{ label: "FAQ", href: "/#faq" },
 		],
 		cta: "Download",
+		discord: "Discord",
 	},
 
 	hero: {
@@ -261,7 +269,11 @@ const en = {
 			},
 			{
 				title: "Company",
-				links: [{ label: "Support", href: `mailto:${SUPPORT_EMAIL}` }],
+				links: [
+					{ label: "Support", href: `mailto:${SUPPORT_EMAIL}` },
+					{ label: "Discord", href: DISCORD_URL },
+					{ label: `X (${X_HANDLE})`, href: X_URL },
+				],
 			},
 			{
 				title: "Legal",
@@ -358,6 +370,7 @@ const zh: Dict = {
 			{ label: "常见问题", href: "/#faq" },
 		],
 		cta: "下载",
+		discord: "Discord 社群",
 	},
 
 	hero: {
@@ -587,7 +600,11 @@ const zh: Dict = {
 			},
 			{
 				title: "公司",
-				links: [{ label: "支持", href: `mailto:${SUPPORT_EMAIL}` }],
+				links: [
+					{ label: "支持", href: `mailto:${SUPPORT_EMAIL}` },
+					{ label: "Discord 社群", href: DISCORD_URL },
+					{ label: `X（${X_HANDLE}）`, href: X_URL },
+				],
 			},
 			{
 				title: "法律",

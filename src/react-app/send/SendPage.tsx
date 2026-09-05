@@ -12,6 +12,31 @@ import { uploadFile, type UploadProgress } from "../lib/uploader.ts";
 
 type Screen = "loading" | "missing" | "locked" | "ready" | "sending" | "finished";
 
+/**
+ * Whether dropping is something this device can actually do.
+ *
+ * On a phone it is not — there is nothing to drag a file from — so "Drop files
+ * here" is an instruction the reader cannot follow, sitting above the one they
+ * can in smaller, dimmer type. Phones are most of what a shared link is opened
+ * on, which makes this the wrong way round by default.
+ *
+ * Read once at module scope: a pointer does not change kind mid-session, and a
+ * `matchMedia` subscription for something that cannot happen is noise in the
+ * bundle PRD 9.4 asks to keep auditable. The `?? true` covers a browser without
+ * `matchMedia` by assuming a desktop, which is what such a browser is.
+ */
+const CAN_DROP = window.matchMedia?.("(hover: hover) and (pointer: fine)").matches ?? true;
+
+/**
+ * The tab title, which the static `index.html` cannot get right: it is one file
+ * serving both the apex and every inbox, so it ships the marketing title and
+ * this replaces it once the inbox has a name. The crawler-facing half of the
+ * same problem is solved server-side in `worker/lib/preview.ts`.
+ */
+function setTitle(title: string): void {
+	document.title = `${title} — Stolnk`;
+}
+
 function sessionId(): string {
 	const key = "stolnk-session";
 	let value = sessionStorage.getItem(key);
@@ -52,15 +77,20 @@ export function SendPage({ slug }: { slug: string }) {
 				const result = await resolveInbox(slug);
 				if (cancelled) return;
 				if (!result.inbox) {
+					setTitle("This link is not active");
 					setScreen("missing");
 					return;
 				}
+				setTitle(`Send files to ${result.inbox.display_name}`);
 				setInbox(result.inbox);
 				setOnline(result.inbox.online);
 				setScreen(result.inbox.password.required ? "locked" : "ready");
 				setResumable(await listResumable(result.inbox.slug));
 			} catch {
-				if (!cancelled) setScreen("missing");
+				if (!cancelled) {
+					setTitle("This link is not active");
+					setScreen("missing");
+				}
 			}
 		})();
 		return () => {
@@ -360,8 +390,8 @@ export function SendPage({ slug }: { slug: string }) {
 							void send(Array.from(event.dataTransfer.files));
 						}}
 					>
-						<strong>Drop files here</strong>
-						<span>or choose files</span>
+						<strong>{CAN_DROP ? "Drop files here" : "Choose files"}</strong>
+						<span>{CAN_DROP ? "or choose files" : "photos, videos, anything"}</span>
 					</div>
 					<input
 						ref={inputRef}
