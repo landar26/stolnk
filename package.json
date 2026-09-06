@@ -52,6 +52,7 @@
 		"lint": "eslint .",
 		"preview": "npm run build && vite preview",
 		"e2e": "node --experimental-strip-types scripts/e2e.ts",
+		"test:multipart": "node --experimental-strip-types scripts/multipart-test.ts",
 		"vectors": "node --experimental-strip-types scripts/gen-vectors.ts",
 		"release:mac": "node --experimental-strip-types scripts/release-mac.ts"
 	},

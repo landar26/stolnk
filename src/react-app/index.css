@@ -1405,3 +1405,49 @@ a.button.large {
 		opacity: 1;
 	}
 }
+
+/*
+ * The terminal / agent section on the send page. Collapsed by default: the
+ * reader of a link they were handed is almost never looking for a command line,
+ * but the ones who are should not have to guess that the address is also an API.
+ */
+.agents {
+	margin-top: 28px;
+	border-top: 1px solid var(--border);
+	padding-top: 16px;
+	font-size: 0.86rem;
+	color: var(--text-dim);
+}
+
+.agents summary {
+	cursor: pointer;
+	color: var(--text-dim);
+	font-size: 0.86rem;
+}
+
+.agents p {
+	margin: 12px 0 0;
+	line-height: 1.6;
+}
+
+.agents .cmd {
+	display: block;
+	margin-top: 10px;
+	padding: 10px 12px;
+	background: var(--surface-2);
+	border: 1px solid var(--border);
+	border-radius: 7px;
+	color: var(--text);
+	overflow-x: auto;
+	white-space: pre;
+}
+
+/*
+ * The sentence that qualifies "Encrypted in your browser" a few lines above.
+ * Marked rather than merely present: someone skimming for the catch should find
+ * it without reading the paragraph before it.
+ */
+.agents .warn-note {
+	border-left: 2px solid color-mix(in srgb, var(--warn) 50%, var(--border));
+	padding-left: 10px;
+}

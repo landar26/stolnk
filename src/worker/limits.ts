@@ -136,6 +136,24 @@ export const RATE_MAX_LICENSE = 20;
  */
 export const RATE_MAX_WAITLIST = 5;
 
+/**
+ * Uploads posted straight to an inbox address (routes/inbox-address.ts).
+ *
+ * Its own bucket rather than sharing `RATE_MAX_TRANSFERS`, which was the first
+ * thing tried and is wrong twice over. The two are not the same request: one
+ * declares a transfer and costs a few writes, the other carries the file itself
+ * through this isolate. And they are not the same client — a script looping
+ * over a folder must not spend the budget a person behind the same office NAT
+ * needs to use the page. Every other endpoint class in this file already has
+ * its own number; this is not the one to make an exception of.
+ *
+ * The same 20 as a transfer, because both are "more than any real client needs
+ * and far less than a flood", and because the bytes are bounded elsewhere
+ * anyway — by MAX_CURL_UPLOAD_BYTES per request and by the daily and monthly
+ * ceilings per inbox and per device.
+ */
+export const RATE_MAX_CURL_UPLOADS = 20;
+
 /** Ciphertext length for a given plaintext length under the chunk framing. */
 export function cipherSizeFor(plainSize: number): number {
 	const chunks = Math.max(1, Math.ceil(plainSize / CHUNK_SIZE));
@@ -146,3 +164,27 @@ export function cipherSizeFor(plainSize: number): number {
 export function partCountFor(cipherSize: number): number {
 	return Math.max(1, Math.ceil(cipherSize / PART_SIZE));
 }
+
+/**
+ * The ceiling on one `curl -F "file=@…"` upload to an inbox address
+ * (routes/inbox-address.ts).
+ *
+ * Cloudflare caps a request body at 100 MB (decimal) on Free and Pro accounts,
+ * and no single curl invocation can get past that — so this number is not a
+ * policy choice, it is the platform's limit with the multipart framing
+ * subtracted. 95 MiB is 99,614,720 bytes; the boundary lines, the part headers
+ * and the epilogue add a few hundred more, which still lands under 100,000,000.
+ *
+ * It sits below `FREE.maxFileSize` as well, so it is always the binding limit
+ * on this path regardless of the owner's tier — one number to explain, in the
+ * capability document and in the refusal.
+ */
+export const MAX_CURL_UPLOAD_BYTES = 95 * 1024 * 1024;
+
+/**
+ * Slack over `MAX_CURL_UPLOAD_BYTES` for the multipart framing itself, used for
+ * the cheap `content-length` pre-flight before the body is touched at all. The
+ * exact per-file limit is applied once the part headers have been read and the
+ * real payload length is known.
+ */
+export const CURL_UPLOAD_OVERHEAD_SLACK = 64 * 1024;

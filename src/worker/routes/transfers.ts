@@ -5,33 +5,32 @@ import {
 	PART_SIZE,
 	RATE_MAX_PARTS,
 	RATE_MAX_TRANSFERS,
-	UPLOAD_TOKEN_TTL_MS,
 	PRO,
 	cipherSizeFor,
 	partCountFor,
 } from "../limits";
 import { randomId } from "../lib/bytes";
-import { hubFor, pushInBackground } from "../lib/deviceauth";
-import { bookRelayBytes, refundRelayBytes, relayUsed, tierFor } from "../lib/entitlement";
+import {
+	abandonTransfer,
+	finishFile,
+	openTransfer,
+	type PlannedFile,
+} from "../lib/relay";
 import {
 	badRequest,
 	clientIp,
 	fail,
 	notFound,
-	quotaExceeded,
 	readJson,
 	requireInt,
 	requireString,
 	unauthorized,
-	utcDay,
-	utcMonth,
 	type AppEnv,
 } from "../lib/http";
 import { type InboxRow } from "../lib/inbox";
-import { fileCompleted, quotaRefused, transferStarted } from "../lib/metrics";
 import { verifierMatches } from "../lib/password";
 import { enforce } from "../lib/ratelimit";
-import { signToken, verifyToken, type UploadToken } from "../lib/tokens";
+import { verifyToken, type UploadToken } from "../lib/tokens";
 
 /**
  * The relay path (PRD 8.3): the browser encrypts, R2 parks the ciphertext, the
@@ -41,6 +40,10 @@ import { signToken, verifyToken, type UploadToken } from "../lib/tokens";
  * peer-to-peer are the ones Rev. A could not offer: the sender can upload while
  * the Mac is asleep, and resume is free because R2 multipart already tracks
  * which parts landed.
+ *
+ * This file is the browser's half of it. Everything a sender and the curl path
+ * (routes/inbox-address.ts) have in common — the quotas, the booking, the
+ * notify — is in lib/relay.ts.
  */
 export const transfers = new Hono<AppEnv>();
 
@@ -59,10 +62,6 @@ interface InitBody {
 	password?: unknown;
 	via?: unknown;
 	files?: unknown;
-}
-
-function r2Key(transferId: string, fileId: string): string {
-	return `relay/${transferId}/${fileId}`;
 }
 
 async function authoriseUpload(c: { env: Env; req: { raw: Request } }, transferId: string) {
@@ -99,23 +98,16 @@ transfers.post("/", async (c) => {
 		}
 	}
 
-	const tier = await tierFor(c.env, inbox.owner_device_id);
-	const now = Date.now();
-
-	// `inboxes.size_limit` was written when the inbox was created, so it can be a
-	// tier behind. The lower of the two wins, which is what makes a refund take
-	// effect immediately: the row may still say 20 GB, but the tier says 2.
-	const fileCap = Math.min(inbox.size_limit, tier.maxFileSize);
-
 	// Validate every file before creating any R2 upload, so a rejected batch
 	// leaves no orphaned multipart uploads behind.
 	//
-	// The bound here is the largest any tier allows, deliberately, and not
-	// `fileCap`. This call reports a malformed request (400 "out of range"), and
-	// a 3 GB file from someone on Free is not malformed — it is over quota, which
-	// PRD 8.6 #3 says is a state to explain rather than an error to report. The
-	// tier ceiling is applied just below, where it can say so in those words.
-	const planned = (files as FileInit[]).map((file, index) => {
+	// The bound here is the largest any tier allows, deliberately, and not the
+	// inbox's own ceiling. This call reports a malformed request (400 "out of
+	// range"), and a 3 GB file from someone on Free is not malformed — it is over
+	// quota, which PRD 8.6 #3 says is a state to explain rather than an error to
+	// report. `openTransfer` applies the tier ceiling, where it can say so in
+	// those words.
+	const planned: PlannedFile[] = (files as FileInit[]).map((file, index) => {
 		const size = requireInt(file.size, `files[${index}].size`, 0, PRO.maxFileSize);
 		return {
 			file_id: randomId(),
@@ -130,178 +122,25 @@ transfers.post("/", async (c) => {
 		};
 	});
 
-	const totalBytes = planned.reduce((sum, file) => sum + file.size, 0);
-
-	// V1 has one path (PRD 8.2 / M4 was cut), so this is a constant rather than
-	// something the client asserts — a sender must not be able to send its
-	// transfer for free by claiming "lan".
-	const transport: "relay" | "lan" = "relay";
-	for (const file of planned) {
-		if (file.size > fileCap) {
-			return quotaExceeded(
-				`Files over ${Math.floor(fileCap / 1024 ** 3)} GB are not accepted by this inbox.`,
-			);
-		}
-	}
-
-	// PRD 16.1 — the monthly relay allowance. This is the paid boundary, and the
-	// only quota in the product that a purchase moves.
-	//
-	// It is keyed by device, not by inbox: the daily ceiling below is abuse
-	// control on one link, this is what someone bought. Booked now and returned
-	// if the transfer never lands, so ciphertext that is aborted or expires
-	// unread does not quietly eat the owner's month.
-	//
-	// Only the relay path counts. Everything is the relay path today, but writing
-	// the condition now means M4 (LAN direct, PRD 8.2) does not have to revisit
-	// billing — and PRD 16.2 turns on LAN being free forever.
-	const month = utcMonth(now);
-	const relayed = transport === "relay" ? totalBytes : 0;
-	if (relayed > 0) {
-		const used = await relayUsed(c.env, inbox.owner_device_id, month);
-		if (used + relayed > tier.monthlyRelayBytes) {
-			quotaRefused({ inbox_id: inboxId, reason: "monthly_relay", bytes: totalBytes });
-			// Addressed to the sender, who is a stranger and not at fault. It says
-			// what to do without naming the owner's tier, their usage, or their
-			// bill — PRD 16.2 promises the inbox never looks broken, and 13.1 says
-			// an unauthenticated caller learns nothing it did not already know.
-			return quotaExceeded(
-				"This inbox cannot take more files this month. Try again later, or ask the person you are sending to.",
-			);
-		}
-	}
-
-	// PRD 8.5 — total parked bytes per device. This is a hard ceiling, not a
-	// billing trigger: over quota we refuse the upload rather than charge for it.
-	//
-	// Deliberately *after* the monthly allowance. On Free the two ceilings are
-	// both 3 GB, so a single over-budget transfer trips both — and this one's
-	// message ("files still waiting to be delivered") is a plain lie when the
-	// queue is empty, which is exactly the case where a first-time sender meets
-	// it. The monthly wall is also the only one of the two that the owner can do
-	// something about.
-	const pending = await c.env.DB.prepare(
-		`SELECT ifnull(sum(f.size), 0) AS bytes
-		 FROM files f
-		 JOIN transfers t ON t.transfer_id = f.transfer_id
-		 JOIN inboxes i ON i.inbox_id = t.inbox_id
-		 WHERE i.owner_device_id = ? AND f.state IN ('uploading', 'ready')`,
-	)
-		.bind(inbox.owner_device_id)
-		.first<{ bytes: number }>();
-	if ((pending?.bytes ?? 0) + totalBytes > tier.pendingQuota) {
-		quotaRefused({ inbox_id: inboxId, reason: "pending_quota", bytes: totalBytes });
-		return quotaExceeded(
-			"This inbox has too many files still waiting to be delivered. Try again once the Mac has collected them.",
-		);
-	}
-
-	// PRD 13.3 — per-inbox daily ceilings.
-	const day = utcDay(now);
-	const usage = await c.env.DB.prepare(
-		"SELECT files, bytes FROM usage_daily WHERE inbox_id = ? AND day = ?",
-	)
-		.bind(inboxId, day)
-		.first<{ files: number; bytes: number }>();
-	if (
-		(usage?.files ?? 0) + planned.length > tier.dailyFiles ||
-		(usage?.bytes ?? 0) + totalBytes > tier.dailyBytes
-	) {
-		quotaRefused({ inbox_id: inboxId, reason: "daily_cap", bytes: totalBytes });
-		return quotaExceeded("This inbox has hit its limit for today. Try again tomorrow.");
-	}
-
-	const transferId = randomId();
-	// Vestigial: `transfers.sender_session` is NOT NULL and used to key the
-	// remembered "always accept from this link" decisions. Those are gone, and
-	// dropping the column would mean rebuilding the largest table in the schema,
-	// so it is filled with a value nobody reads.
-	const senderSession = randomId();
-	// PRD 15.1 — a coarse "did the owner send this to themselves?" signal. It is
-	// a hint from the client, deliberately not a tracking mechanism.
-	const senderIsOwner = body.via === "app" ? 1 : 0;
-	const expiresAt = now + tier.ttlHours * 60 * 60 * 1000;
-
-	// Signed before the first write, for the same reason registration is: it reads
-	// SESSION_SECRET and throws when that is unset, and a throw after the inserts
-	// would leave a transfer and its file rows behind that no caller ever got a
-	// token for. Every input to it is already known here.
-	const token = await signToken(c.env.SESSION_SECRET, {
-		t: "upload",
-		transfer: transferId,
-		inbox: inboxId,
-		exp: now + UPLOAD_TOKEN_TTL_MS,
-	});
-
-	await c.env.DB.prepare(
-		`INSERT INTO transfers (transfer_id, inbox_id, sender_session, state, total_bytes,
-		                        sender_is_owner, created_at, expires_at)
-		 VALUES (?, ?, ?, 'uploading', ?, ?, ?, ?)`,
-	)
-		.bind(transferId, inboxId, senderSession, totalBytes, senderIsOwner, now, expiresAt)
-		.run();
-
-	const created: Array<{ file_id: string; part_size: number; part_count: number }> = [];
-	for (const file of planned) {
-		const key = r2Key(transferId, file.file_id);
-		const multipart = await c.env.RELAY.createMultipartUpload(key);
-		await c.env.DB.prepare(
-			`INSERT INTO files (file_id, transfer_id, r2_key, upload_id, enc_name, name_iv, size,
-			                    cipher_size, nonce_prefix, wrapped_key, key_iv, eph_pub,
-			                    plain_sha256, state, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', 'uploading', ?)`,
-		)
-			.bind(
-				file.file_id,
-				transferId,
-				key,
-				multipart.uploadId,
-				file.enc_name,
-				file.name_iv,
-				file.size,
-				file.cipher_size,
-				file.nonce_prefix,
-				file.wrapped_key,
-				file.key_iv,
-				file.eph_pub,
-				now,
-			)
-			.run();
-		created.push({
-			file_id: file.file_id,
-			part_size: PART_SIZE,
-			part_count: partCountFor(file.cipher_size),
-		});
-	}
-
-	// Both counters in one batch: a transfer that is accepted but not booked
-	// would be free bytes, and one booked but not accepted would be stolen ones.
-	const counters = [
-		c.env.DB.prepare(
-			`INSERT INTO usage_daily (inbox_id, day, files, bytes) VALUES (?, ?, ?, ?)
-			 ON CONFLICT (inbox_id, day) DO UPDATE SET files = files + ?, bytes = bytes + ?`,
-		).bind(inboxId, day, planned.length, totalBytes, planned.length, totalBytes),
-	];
-	if (relayed > 0) {
-		counters.push(bookRelayBytes(c.env, inbox.owner_device_id, relayed, month));
-	}
-	await c.env.DB.batch(counters);
-
-	transferStarted({
-		inbox_id: inboxId,
-		files: planned.length,
-		bytes: totalBytes,
-		sender_is_owner: senderIsOwner === 1,
-		sub_inbox: inbox.path_slug !== null,
+	const opened = await openTransfer(c.env, {
+		inbox,
+		planned,
+		// PRD 15.1 — a coarse "did the owner send this to themselves?" signal.
+		senderIsOwner: body.via === "app",
+		via: "browser",
 	});
 
 	return c.json(
 		{
-			transfer_id: transferId,
-			token,
-			expires_at: expiresAt,
+			transfer_id: opened.transferId,
+			token: opened.token,
+			expires_at: opened.expiresAt,
 			part_size: PART_SIZE,
-			files: created,
+			files: opened.files.map((file) => ({
+				file_id: file.file_id,
+				part_size: file.part_size,
+				part_count: file.part_count,
+			})),
 		},
 		201,
 	);
@@ -391,43 +230,15 @@ transfers.post("/:tid/files/:fid/complete", async (c) => {
 		return badRequest(`Expected ${expectedParts} parts, have ${results.length}.`);
 	}
 
-	const upload = c.env.RELAY.resumeMultipartUpload(file.r2_key, file.upload_id);
-	await upload.complete(results.map((row) => ({ partNumber: row.part_number, etag: row.etag })));
-
-	await c.env.DB.prepare(
-		"UPDATE files SET state = 'ready', plain_sha256 = ?, upload_id = NULL WHERE file_id = ?",
-	)
-		.bind(sha256, fileId)
-		.run();
-
-	const owner = await c.env.DB.prepare(
-		`SELECT i.owner_device_id AS device_id, t.inbox_id
-		 FROM transfers t JOIN inboxes i ON i.inbox_id = t.inbox_id
-		 WHERE t.transfer_id = ?`,
-	)
-		.bind(transferId)
-		.first<{ device_id: string; inbox_id: string }>();
-
-	if (owner) {
-		fileCompleted({
-			inbox_id: owner.inbox_id,
-			bytes: file.cipher_size,
-			parts: results.length,
-			transport: "relay",
-		});
-
-		// Outlives this response deliberately: an asleep Mac simply finds it via
-		// /pending on waking, but a Mac that is awake must not have to wait out a
-		// polling interval for something it could have been told about.
-		pushInBackground(c.executionCtx, () =>
-			hubFor(c.env, owner.device_id).notifyDevice({
-				type: "file.ready",
-				file_id: fileId,
-				transfer_id: transferId,
-				inbox_id: owner.inbox_id,
-			}),
-		);
-	}
+	await finishFile(c.env, c.executionCtx, {
+		transferId,
+		fileId,
+		r2Key: file.r2_key,
+		uploadId: file.upload_id,
+		parts: results.map((row) => ({ partNumber: row.part_number, etag: row.etag })),
+		plainSha256: sha256,
+		cipherSize: file.cipher_size,
+	});
 
 	return c.json({ state: "ready" });
 });
@@ -483,65 +294,6 @@ transfers.get("/:tid", async (c) => {
 transfers.post("/:tid/abort", async (c) => {
 	const transferId = c.req.param("tid");
 	await authoriseUpload(c, transferId);
-
-	const { results } = await c.env.DB.prepare(
-		"SELECT file_id, r2_key, upload_id, state, size FROM files WHERE transfer_id = ?",
-	)
-		.bind(transferId)
-		.all<{
-			file_id: string;
-			r2_key: string;
-			upload_id: string | null;
-			state: string;
-			size: number;
-		}>();
-
-	for (const file of results) {
-		if (file.state === "delivered") continue;
-		try {
-			if (file.upload_id) {
-				await c.env.RELAY.resumeMultipartUpload(file.r2_key, file.upload_id).abort();
-			} else {
-				await c.env.RELAY.delete(file.r2_key);
-			}
-		} catch {
-			// Already gone; the cron sweep is the backstop.
-		}
-	}
-
-	// PRD 16.1 — give back what was booked but never delivered. Per file, not
-	// `transfers.total_bytes`: a transfer can be part delivered, and the owner
-	// keeps paying only for the parts that actually reached them.
-	//
-	// Refunded against the month the transfer was *created* in, so a transfer
-	// booked on the 31st and withdrawn on the 1st credits the month that charged
-	// it rather than handing the new month a discount.
-	const owner = await c.env.DB.prepare(
-		`SELECT i.owner_device_id AS device_id, t.created_at
-		 FROM transfers t JOIN inboxes i ON i.inbox_id = t.inbox_id
-		 WHERE t.transfer_id = ?`,
-	)
-		.bind(transferId)
-		.first<{ device_id: string; created_at: number }>();
-
-	const undelivered = results
-		.filter((file) => file.state !== "delivered" && file.state !== "aborted")
-		.reduce((sum, file) => sum + file.size, 0);
-
-	const writes = [
-		c.env.DB.prepare(
-			"UPDATE files SET state = 'aborted', upload_id = NULL WHERE transfer_id = ? AND state != 'delivered'",
-		).bind(transferId),
-		c.env.DB.prepare("UPDATE transfers SET state = 'aborted' WHERE transfer_id = ?").bind(
-			transferId,
-		),
-	];
-	if (owner && undelivered > 0) {
-		writes.push(
-			refundRelayBytes(c.env, owner.device_id, undelivered, utcMonth(owner.created_at)),
-		);
-	}
-	await c.env.DB.batch(writes);
-
+	await abandonTransfer(c.env, transferId);
 	return c.json({ aborted: true });
 });

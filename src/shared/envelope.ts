@@ -61,6 +61,32 @@ export function chunkAad(fileIdBytes: Uint8Array, index: number, total: number):
 	return aad;
 }
 
+/**
+ * WebCrypto is the same at runtime everywhere this file runs; its *types* are
+ * not. The Workers runtime declares `generateKey` and `exportKey` as returning
+ * unions the DOM lib narrows, and spells the ECDH derive parameter differently.
+ *
+ * Absorbing that here is the cheap half of a trade whose expensive half is
+ * unacceptable: two copies of the envelope, one for the browser and one for the
+ * Worker, disagreeing silently. `testdata/vectors.json` exists because that
+ * class of disagreement produces files that upload perfectly and cannot be
+ * opened.
+ */
+async function generateKeyPair(
+	algorithm: { name: string; namedCurve: string },
+	usages: readonly string[],
+): Promise<CryptoKeyPair> {
+	return crypto.subtle.generateKey(
+		algorithm as never,
+		true,
+		usages as never,
+	) as unknown as Promise<CryptoKeyPair>;
+}
+
+async function exportRaw(key: CryptoKey): Promise<ArrayBuffer> {
+	return (await crypto.subtle.exportKey("raw", key)) as ArrayBuffer;
+}
+
 export interface FileEnvelope {
 	wrapped_key: string;
 	key_iv: string;
@@ -84,21 +110,17 @@ export async function sealContentKey(
 		false,
 		[],
 	);
-	const ephemeral = await crypto.subtle.generateKey(
-		{ name: "ECDH", namedCurve: "P-256" },
-		true,
-		["deriveBits"],
-	);
+	const ephemeral = await generateKeyPair({ name: "ECDH", namedCurve: "P-256" }, ["deriveBits"]);
 
 	const shared = await crypto.subtle.deriveBits(
-		{ name: "ECDH", public: recipient },
+		{ name: "ECDH", public: recipient } as never,
 		ephemeral.privateKey,
 		256,
 	);
 	const kek = await deriveKek(new Uint8Array(shared));
 
 	const keyIv = crypto.getRandomValues(new Uint8Array(12));
-	const rawContentKey = await crypto.subtle.exportKey("raw", contentKey);
+	const rawContentKey = await exportRaw(contentKey);
 	const wrapped = await crypto.subtle.encrypt(
 		{ name: "AES-GCM", iv: keyIv as BufferSource },
 		kek,
@@ -108,9 +130,7 @@ export async function sealContentKey(
 	return {
 		wrapped_key: toBase64Url(new Uint8Array(wrapped)),
 		key_iv: toBase64Url(keyIv),
-		eph_pub: toBase64Url(
-			new Uint8Array(await crypto.subtle.exportKey("raw", ephemeral.publicKey)),
-		),
+		eph_pub: toBase64Url(new Uint8Array(await exportRaw(ephemeral.publicKey))),
 		nonce_prefix: toBase64Url(crypto.getRandomValues(new Uint8Array(4))),
 	};
 }
@@ -137,7 +157,7 @@ export async function newContentKey(): Promise<CryptoKey> {
 	return crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, [
 		"encrypt",
 		"decrypt",
-	]);
+	]) as Promise<CryptoKey>;
 }
 
 export async function importContentKey(raw: Uint8Array): Promise<CryptoKey> {

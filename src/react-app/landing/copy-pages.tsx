@@ -173,6 +173,26 @@ export const pagesEn = {
 					browser.
 				</p>
 
+				<h2>One route that is not browser-encrypted at all</h2>
+				<p>
+					An inbox address is also usable from a terminal —{" "}
+					<code>curl -F &quot;file=@photo.jpg&quot; ryan.stolnk.com/client-a</code> — because
+					scripts, build jobs and AI agents cannot run the encryption a browser runs.{" "}
+					<strong>
+						On that route the file arrives at our server as plaintext, and our server builds
+						the envelope with your Mac&rsquo;s public key.
+					</strong>{" "}
+					Your Mac cannot tell the two apart and does not need to: what it receives, and what
+					it alone can open, is identical either way.
+				</p>
+				<p>
+					What differs is one request&rsquo;s worth of exposure. The bytes exist in our
+					server&rsquo;s memory in the clear for as long as it takes to encrypt them, and are
+					written nowhere in that form. That is a real difference from the paragraph above
+					rather than a footnote to it, which is why it is here instead of left to be
+					discovered — if it matters for a particular file, send that file through the page.
+				</p>
+
 				<h2>Things we deliberately do not say</h2>
 				<p>
 					Not "zero knowledge" — we know file sizes and timing. Not "your files never touch
@@ -418,6 +438,18 @@ export const pagesZh: typeof pagesEn = {
 				</ul>
 				<p>
 					这些都没有把局限变成保证，只是把它收窄了。如果某个文件绝对不能被除你之外的任何人读到，那它应该在进入任何浏览器之前就已经加密。
+				</p>
+
+				<h2>还有一条路，根本不在浏览器里加密</h2>
+				<p>
+					收件地址同时也能在终端里用——
+					<code>curl -F &quot;file=@photo.jpg&quot; ryan.stolnk.com/client-a</code>
+					——因为脚本、构建任务和 AI agent 跑不了浏览器跑的那套加密。
+					<strong>走这条路时，文件是以明文到达我们服务器的，再由我们的服务器用你 Mac 的公钥封装。</strong>{" "}
+					你的 Mac 分辨不出这两者，也不需要分辨：它收到的、并且只有它能打开的那份东西，两条路完全一样。
+				</p>
+				<p>
+					不一样的是一次请求那么长的暴露窗口。字节以明文形式存在于我们服务器的内存里，直到加密完成为止，并且从不以那种形式写到任何地方。这跟上面一段是实打实的区别，不是它的脚注——所以写在这里，而不是留给人自己发现。如果某个文件在意这一点，那个文件就走页面发。
 				</p>
 
 				<h2>我们刻意不说的话</h2>

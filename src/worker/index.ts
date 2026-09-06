@@ -10,6 +10,7 @@ import { verifyToken, type DeviceToken, type UploadToken } from "./lib/tokens";
 import { checkout } from "./routes/checkout";
 import { delivery } from "./routes/delivery";
 import { devices, names } from "./routes/devices";
+import { inboxCapabilities, inboxUpload, wantsCapabilities } from "./routes/inbox-address";
 import { inboxes } from "./routes/inboxes";
 import { licenses } from "./routes/licenses";
 import { downloads, release } from "./routes/releases";
@@ -113,6 +114,28 @@ app.route("/api/v1", delivery);
 app.route("/download", downloads);
 
 /**
+ * The inbox address used as an API rather than as a page (PRD 1.2 is silent on
+ * this; it is new). `POST ryan.stolnk.com/client-a` with a multipart body is a
+ * file upload, and `OPTIONS` describes how to make one — so a terminal, a
+ * script or an agent that was handed one link needs nothing else.
+ *
+ * Catch-alls, and therefore mounted here: an inbox path is arbitrary
+ * (`/client-a`, `/2026/invoices`) and cannot be expressed as a route. They sit
+ * after every `/api/` route so those still win, and anything still addressed to
+ * `/api/` — or arriving on the apex, which has no inboxes — is handed to the
+ * fallback below exactly as before.
+ */
+app.post("*", (c) => {
+	if (c.req.path.startsWith("/api/") || !isInboxHost(c.req.url)) return c.notFound();
+	return inboxUpload(c);
+});
+
+app.options("*", (c) => {
+	if (c.req.path.startsWith("/api/") || !isInboxHost(c.req.url)) return c.notFound();
+	return inboxCapabilities(c);
+});
+
+/**
  * Signalling. Tokens travel in the query string because the WebSocket handshake
  * cannot carry an Authorization header; both are short-lived and single-purpose.
  */
@@ -169,15 +192,29 @@ app.get("/api/v1/ws/sender", async (c) => {
  * and `index.html` when there is not — both of the answers needed here, and the
  * reason this is shorter than what it replaced.
  *
- * GET regardless of the method that arrived: this is the last stop, and a POST
- * to an unrouted path is still a request for a page.
+ * GET regardless of the method that arrived: this is the last stop, and a
+ * request that reaches it is a request for a page. The one method that is no
+ * longer true of is POST on an inbox host, which is claimed above as an upload
+ * before it can ever get here.
  */
 app.notFound(async (c) => {
 	if (c.req.path.startsWith("/api/")) {
 		return c.json({ error: "not_found", message: "No such endpoint." }, 404);
 	}
-	// An inbox address (PRD 1.2) lands here as an asset miss and is rendered by
-	// the SPA, which resolves it through /api/v1/resolve and shows its own 404.
+	/*
+	 * An inbox address is also an API (routes/inbox-address.ts). A caller that
+	 * asked for JSON in so many words gets the capability document instead of the
+	 * page.
+	 *
+	 * The test is deliberately an opt-in. Under `run_worker_first` every asset
+	 * request arrives here too, and those carry `Accept: * / *`; anything looser
+	 * would answer JSON to a `<script src>` and take the whole site down.
+	 */
+	if (isInboxHost(c.req.url) && wantsCapabilities(c)) return inboxCapabilities(c);
+
+	// An inbox address (PRD 1.2) otherwise lands here as an asset miss and is
+	// rendered by the SPA, which resolves it through /api/v1/resolve and shows
+	// its own 404.
 	const asset = await c.env.ASSETS.fetch(new Request(new URL(c.req.url), { method: "GET" }));
 
 	// The one thing the SPA cannot do for itself: a crawler building a link

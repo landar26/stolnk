@@ -28,6 +28,14 @@ type Screen = "loading" | "missing" | "locked" | "ready" | "sending" | "finished
 const CAN_DROP = window.matchMedia?.("(hover: hover) and (pointer: fine)").matches ?? true;
 
 /**
+ * The curl path's per-file ceiling, in MiB. It mirrors `MAX_CURL_UPLOAD_BYTES`
+ * in worker/limits.ts, where the reasoning for the number lives; it is not
+ * carried on the resolve response because it is a property of the transport
+ * rather than of this inbox, and it is the same for everybody.
+ */
+const CURL_MAX_MIB = 95;
+
+/**
  * The tab title, which the static `index.html` cannot get right: it is one file
  * serving both the apex and every inbox, so it ships the marketing title and
  * this replaces it once the inbox has a name. The crawler-facing half of the
@@ -35,6 +43,61 @@ const CAN_DROP = window.matchMedia?.("(hover: hover) and (pointer: fine)").match
  */
 function setTitle(title: string): void {
 	document.title = `${title} — Stolnk`;
+}
+
+/**
+ * The same address, for a terminal.
+ *
+ * `POST`ing a multipart body to an inbox address uploads a file
+ * (worker/routes/inbox-address.ts), which is the only way a shell script, a CI
+ * job or an agent can use one of these links — none of them can run the
+ * encryption this page runs.
+ *
+ * Folded away by default and *below* the note above, in that order on purpose.
+ * Almost nobody opening a link they were sent wants a command line, and the
+ * caveat inside is the kind that has to sit next to the promise it qualifies:
+ * "Encrypted in your browser" is four lines up and is not true of this route.
+ */
+function TerminalHint({ url, passworded }: { url: string; passworded: boolean }) {
+	const command = `curl --fail-with-body ${passworded ? '-F "password=…" ' : ""}-F "file=@./path/to/file" "${url}"`;
+	const [copied, setCopied] = useState(false);
+
+	return (
+		<details className="agents">
+			<summary>For terminal &amp; AI agents</summary>
+			<p>
+				You do not need the box above — run this, with your own file in place of the
+				path.
+			</p>
+			<code className="cmd">{command}</code>
+			<p className="row">
+				<button
+					className="link"
+					onClick={() => {
+						// No fallback path: `navigator.clipboard` needs a secure context,
+						// which every real inbox address has, and the command is selectable
+						// text either way.
+						void navigator.clipboard?.writeText(command).then(
+							() => setCopied(true),
+							() => undefined,
+						);
+					}}
+				>
+					{copied ? "Copied" : "Copy"}
+				</button>
+			</p>
+			<p>
+				One file per request, up to {CURL_MAX_MIB} MiB. Add{" "}
+				<code>?format=json</code> to this address for a machine-readable description
+				of it.
+			</p>
+			<p className="warn-note">
+				Files sent this way are encrypted on our server with this Mac&rsquo;s public
+				key, not in your browser: the plaintext passes through us for the length of
+				one request. Use the box above for browser-side encryption.
+			</p>
+		</details>
+	);
 }
 
 export function SendPage({ slug }: { slug: string }) {
@@ -376,6 +439,8 @@ export function SendPage({ slug }: { slug: string }) {
 						<br />
 						Only this Mac can open them.
 					</p>
+
+					<TerminalHint url={inbox.url} passworded={inbox.password.required} />
 				</>
 			)}
 

@@ -37,8 +37,8 @@ import { COMPANY_EN, COMPANY_ZH, SUPPORT_EMAIL } from "./contact.ts";
  * guessed at in the prose.
  */
 
-const UPDATED_EN = "4 September 2026";
-const UPDATED_ZH = "2026 年 9 月 4 日";
+const UPDATED_EN = "6 September 2026";
+const UPDATED_ZH = "2026 年 9 月 6 日";
 
 export const legalEn = {
 	privacy: {
@@ -61,10 +61,22 @@ export const legalEn = {
 
 				<h2>What happens before anything reaches us</h2>
 				<p>
-					A file is encrypted in the sender's browser with a one-time key, wrapped so that
-					only the receiving Mac can unwrap it. The filename is encrypted with it. What
-					arrives at our servers is ciphertext, and we hold no key that opens it.{" "}
-					<a href="/how-it-works">How that works, including its limits</a>.
+					A file sent through the web page is encrypted in the sender's browser with a
+					one-time key, wrapped so that only the receiving Mac can unwrap it. The filename is
+					encrypted with it. What arrives at our servers is ciphertext, and we hold no key
+					that opens it.
+				</p>
+				<p>
+					<strong>One route is different, and we would rather say so here than have you
+					find out.</strong>{" "}
+					An inbox address also accepts a file posted straight to it from a terminal or a
+					script (<code>curl -F "file=@…"</code>), because nothing outside a browser can run
+					that encryption. On that route the file reaches us as plaintext and{" "}
+					<em>we</em> build the envelope with the receiving Mac's public key. The Mac still
+					holds the only key that opens it, and what lands is identical — but for the length
+					of that one request the contents are readable by our server. They are held in
+					memory only, never written in that form, and nothing else about the transfer
+					changes. <a href="/how-it-works">How that works, including its limits</a>.
 				</p>
 
 				<h2>What we process, why, and on what basis</h2>
@@ -574,7 +586,11 @@ export const legalZh: typeof legalEn = {
 
 				<h2>在任何东西到达我们之前</h2>
 				<p>
-					文件在发送方的浏览器里就用一把一次性密钥加密，而这把密钥被包装成只有接收端那台 Mac 能解开的形式。文件名也用它加密。到达我们服务器的是密文，我们手里没有任何能打开它的密钥。
+					通过网页发出的文件，在发送方的浏览器里就用一把一次性密钥加密，而这把密钥被包装成只有接收端那台 Mac 能解开的形式。文件名也用它加密。到达我们服务器的是密文，我们手里没有任何能打开它的密钥。
+				</p>
+				<p>
+					<strong>有一条路不一样，我们宁可写在这里，也不愿你自己撞见。</strong>{" "}
+					收件地址同样接受从终端或脚本直接 POST 上来的文件（<code>curl -F "file=@…"</code>），因为浏览器以外的东西跑不了那套加密。走这条路时，文件是以明文到达我们这里的，再由<em>我们</em>用接收端 Mac 的公钥完成封装。能打开它的钥匙依然只在那台 Mac 手里，最终落地的东西也完全一样——但在那一次请求持续的时间里，内容对我们的服务器是可读的。它只存在于内存中，从不以那种形式写下来，这次传输的其余部分也没有任何不同。
 					<a href="/how-it-works">这套机制是怎么运作的，以及它的局限</a>。
 				</p>
 

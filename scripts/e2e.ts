@@ -8,8 +8,10 @@
  * that authenticates with a P-256 key. It covers the acceptance items from
  * PRD 18 that can be checked without a real Mac or a real phone.
  */
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
 import {
 	CHUNK_SIZE,
 	chunkCountFor,
@@ -773,11 +775,9 @@ check("nothing left pending", afterAck.body.files.length === 0);
 section("Retention (a record can be forgotten without giving up the address)");
 // The state here is exactly the one that matters: one transfer just delivered,
 // nothing pending, and an inbox whose address the owner wants to keep.
-const usedBeforeClear = (await api("/api/v1/licenses/status", { token })).body
-	.relay_used as number;
-
-// Something still in flight, to prove the clear leaves it alone. Declared and
-// never uploaded, so it sits in 'uploading' with an object parked for it.
+//
+// Add something still in flight, to prove the clear leaves it alone. Declared
+// and never uploaded, so it sits in 'uploading' with an object parked for it.
 const inFlight = await api("/api/v1/transfers", {
 	method: "POST",
 	body: JSON.stringify({
@@ -796,6 +796,12 @@ const inFlight = await api("/api/v1/transfers", {
 	}),
 });
 check("a second transfer is in flight", inFlight.status === 201, JSON.stringify(inFlight.body));
+
+// Read after the booking above, not before it: accepting that transfer books
+// its bytes, so a reading taken earlier would show the clear "adding" the
+// 1024 bytes the booking added.
+const usedBeforeClear = (await api("/api/v1/licenses/status", { token })).body
+	.relay_used as number;
 
 const cleared = await api(`/api/v1/inboxes/${inboxId}/transfers`, { method: "DELETE", token });
 check(
@@ -828,7 +834,7 @@ check(
 	`${usedBeforeClear} -> ${usedAfterClear}`,
 );
 
-const stillResolves = await api(on(NAME, "/api/v1/resolve?slug=inbox"));
+const stillResolves = await api(on(NAME, "/api/v1/resolve?slug=client-a"));
 check(
 	"the inbox and its address are untouched — this is the whole difference from delete",
 	stillResolves.status === 200 && stillResolves.body.inbox_id === inboxId,
@@ -954,6 +960,316 @@ await api(`/api/v1/inboxes/${inboxId}`, {
 	token,
 	body: JSON.stringify({ password: null }),
 });
+
+section("The inbox address as an API (curl and agents)");
+/*
+ * The same URL a person opens, used by a machine. Two things are worth
+ * asserting beyond "did it 202": that the file the Mac ends up holding is
+ * byte-identical to what curl sent — the Worker is doing the encrypting on this
+ * path, so a framing mistake here is a corrupted file rather than a failed
+ * request — and that every refusal leaves nothing booked and nothing parked.
+ */
+const curlAddress = on(NAME, "/client-a");
+
+const capabilities = await api(`${curlAddress}?format=json`);
+check("?format=json describes the address", capabilities.status === 200, `${capabilities.status}`);
+check("it names the field curl must use", capabilities.body?.upload?.fileField === "file");
+check("it carries a command that can be run as-is", /^curl --fail-with-body /.test(capabilities.body?.curl ?? ""));
+check(
+	"it states the per-file ceiling",
+	capabilities.body?.upload?.maxBytesPerRequest === 95 * 1024 * 1024,
+	String(capabilities.body?.upload?.maxBytesPerRequest),
+);
+check("it says one file per request", capabilities.body?.upload?.maxFilesPerRequest === 1);
+check(
+	"it does not pretend this path is browser-encrypted",
+	/not in your browser/.test(capabilities.body?.encryption ?? ""),
+);
+check(
+	"no wildcard CORS — an inbox address must not be probeable cross-origin",
+	(await fetch(`${curlAddress}?format=json`)).headers.get("access-control-allow-origin") === null,
+);
+const viaAccept = await fetch(curlAddress, { headers: { accept: "application/json" } });
+check("Accept: application/json works too", viaAccept.status === 200);
+const asPage = await fetch(curlAddress);
+check(
+	"a browser still gets the page",
+	asPage.status === 200 && (asPage.headers.get("content-type") ?? "").includes("text/html"),
+	asPage.headers.get("content-type") ?? "",
+);
+const unknownAddress = await api(`${on(NAME, "/no-such-path")}?format=json`);
+check("an address that does not exist 404s", unknownAddress.status === 404);
+/*
+ * `OPTIONS` returns the same document in production and is not asserted here:
+ * the Vite dev server answers preflights itself, so the request never reaches
+ * the Worker locally. Run the suite against a deployed origin to see it.
+ */
+
+/** POSTs a multipart body the way curl does, without shelling out. */
+async function curlUpload(
+	address: string,
+	name: string,
+	data: Uint8Array,
+	options: { fields?: Array<[string, string]>; trailingField?: boolean; headers?: Record<string, string> } = {},
+) {
+	const form = new FormData();
+	for (const [key, value] of options.fields ?? []) form.append(key, value);
+	form.append("file", new Blob([data]), name);
+	if (options.trailingField) form.append("note", "after the file");
+	const response = await fetch(address, { method: "POST", body: form, headers: options.headers });
+	const text = await response.text();
+	let body: any = null;
+	try {
+		body = text ? JSON.parse(text) : null;
+	} catch {
+		body = text;
+	}
+	return { status: response.status, body };
+}
+
+/** Everything the Mac does with a pending file, ending in an ACK. */
+async function collectOne(expected: { name: string; bytes: Uint8Array }) {
+	const list = await api("/api/v1/pending", { token });
+	const file = list.body.files?.[0];
+	if (!file) return { ok: false, reason: "nothing pending" };
+
+	const key = await unwrapContentKey(device.kex.privateKey, file.eph_pub, file.key_iv, file.wrapped_key);
+	const name = await decryptName(key, file.enc_name, file.name_iv);
+	const response = await fetch(`${BASE}/api/v1/files/${file.file_id}/content`, {
+		headers: { authorization: `Bearer ${token}` },
+	});
+	const ciphertext = new Uint8Array(await response.arrayBuffer());
+
+	const total = chunkCountFor(expected.bytes.length);
+	const plain = new Uint8Array(expected.bytes.length);
+	let read = 0;
+	let written = 0;
+	for (let index = 0; index < total; index++) {
+		const length = Math.min(CHUNK_SIZE, expected.bytes.length - index * CHUNK_SIZE) + 16;
+		const chunk = await decryptChunk(key, {
+			noncePrefix: fromBase64Url(file.nonce_prefix),
+			fileIdBytes: fileIdBytes(file.file_id),
+			index,
+			total,
+			ciphertext: ciphertext.subarray(read, read + length),
+		});
+		plain.set(chunk, written);
+		read += length;
+		written += chunk.length;
+	}
+
+	const digest = toHex(await crypto.subtle.digest("SHA-256", plain));
+	await api(`/api/v1/files/${file.file_id}/ack`, { method: "POST", token });
+	return {
+		ok: true,
+		name,
+		framingOk: ciphertext.length === cipherSizeFor(expected.bytes.length),
+		identical: digest === toHex(await crypto.subtle.digest("SHA-256", expected.bytes)),
+		hashMatches: digest === file.plain_sha256,
+		nameOk: name === expected.name,
+	};
+}
+
+/** `getRandomValues` refuses more than 64 KiB in one call. */
+function randomBytes(length: number): Uint8Array {
+	const out = new Uint8Array(length);
+	for (let at = 0; at < length; at += 65536) {
+		crypto.getRandomValues(out.subarray(at, Math.min(length, at + 65536)));
+	}
+	return out;
+}
+
+// Two chunks and a partial third, so the chunk count bound into every AAD is
+// something the Worker had to get right rather than a constant 1.
+const curlBytes = randomBytes(2 * CHUNK_SIZE + 4096);
+const curlSent = await curlUpload(curlAddress, "季度报告 ✅.bin", curlBytes);
+check("a multipart POST to the address is accepted", curlSent.status === 202, JSON.stringify(curlSent.body).slice(0, 200));
+check("it answers with what it took", curlSent.body?.file?.size === curlBytes.length, String(curlSent.body?.file?.size));
+check(
+	"the reply says accepted rather than delivered",
+	/^Accepted\./.test(curlSent.body?.message ?? ""),
+	String(curlSent.body?.message),
+);
+
+const collected = await collectOne({ name: "季度报告 ✅.bin", bytes: curlBytes });
+check("the Mac finds it waiting", collected.ok, collected.reason ?? "");
+check("the filename the Worker encrypted decrypts on the Mac", collected.nameOk, String(collected.name));
+check("the ciphertext matches the wire format's framing", collected.framingOk);
+check("what the Mac decrypts is byte-identical to what was posted", collected.identical);
+check("the plaintext digest the Worker recorded is the real one", collected.hashMatches);
+
+// A genuine curl, not an approximation of one. The whole point of this path is
+// that the client is a program nobody here wrote, so at least one check has to
+// go through the real thing.
+const realCurlFile = `${tmpdir()}/stolnk-e2e-${Math.random().toString(36).slice(2)}.bin`;
+const realCurlBytes = randomBytes(48_000);
+writeFileSync(realCurlFile, realCurlBytes);
+let realCurlStatus = "";
+try {
+	realCurlStatus = execFileSync(
+		"curl",
+		["-s", "-o", "/dev/null", "-w", "%{http_code}", "-F", `file=@${realCurlFile}`, curlAddress],
+		{ encoding: "utf8" },
+	).trim();
+} catch (error) {
+	realCurlStatus = String(error);
+} finally {
+	rmSync(realCurlFile, { force: true });
+}
+check("real curl -F uploads to the address", realCurlStatus === "202", realCurlStatus);
+const realCollected = await collectOne({
+	name: realCurlFile.split("/").pop() as string,
+	bytes: realCurlBytes,
+});
+check("and what real curl sent arrives intact", realCollected.identical && realCollected.nameOk);
+
+// Everything above has been collected and acknowledged, so the ledger is back
+// where it started and each refusal below has to leave it there.
+const usedBeforeCurl = (await api("/api/v1/licenses/status", { token })).body.relay_used as number;
+
+const refusals: Array<[string, () => Promise<number>]> = [
+	[
+		"a body that is not multipart",
+		async () =>
+			(await fetch(curlAddress, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }))
+				.status,
+	],
+	[
+		"a multipart body with no file in it",
+		async () => {
+			const form = new FormData();
+			form.append("note", "hello");
+			return (await fetch(curlAddress, { method: "POST", body: form })).status;
+		},
+	],
+	[
+		"a body with no Content-Length at all",
+		async () =>
+			(
+				await fetch(curlAddress, {
+					method: "POST",
+					headers: { "content-type": "multipart/form-data; boundary=zzz" },
+					body: new ReadableStream({
+						start(controller) {
+							controller.enqueue(new TextEncoder().encode("--zzz--\r\n"));
+							controller.close();
+						},
+					}),
+					// @ts-expect-error — Node needs this to stream a request body.
+					duplex: "half",
+				})
+			).status,
+	],
+];
+for (const [name, run] of refusals) {
+	const status = await run();
+	check(`${name} is refused`, status === 400, String(status));
+}
+
+// The size is derived from Content-Length on the assumption that the file is
+// the last part; a field after it breaks that, and the check that catches it is
+// the one standing between a wrong chunk count and a file that lands short.
+const trailing = await curlUpload(curlAddress, "late.bin", new Uint8Array(4096), { trailingField: true });
+check("a field after the file is refused, not truncated", trailing.status === 400, JSON.stringify(trailing.body));
+
+/*
+ * The ceiling is read off `Content-Length` before the body is touched, so in
+ * production a 96 MiB upload is refused without 96 MiB crossing the wire. That
+ * half cannot be shown here: the dev server buffers the whole request before
+ * the Worker sees it, so claiming a length and not sending it just hangs. What
+ * is checked is the part that matters either way — that a body over the ceiling
+ * is refused at all — and it needs a real 96 MiB body, so it is behind the same
+ * flag as the other big-file case.
+ */
+if (process.env.E2E_BIG === "1") {
+	const hugeFile = `${tmpdir()}/stolnk-e2e-huge-${Math.random().toString(36).slice(2)}.bin`;
+	writeFileSync(hugeFile, Buffer.alloc(96 * 1024 * 1024));
+	let ceilingStatus = "";
+	try {
+		ceilingStatus = execFileSync(
+			"curl",
+			["-s", "-o", "/dev/null", "-w", "%{http_code}", "-F", `file=@${hugeFile}`, curlAddress],
+			{ encoding: "utf8" },
+		).trim();
+	} catch (error) {
+		ceilingStatus = String(error);
+	} finally {
+		rmSync(hugeFile, { force: true });
+	}
+	check("a body over the ceiling is refused", ceilingStatus === "413", ceilingStatus);
+}
+
+const nothingPending = await api("/api/v1/pending", { token });
+check("no refusal left anything parked", nothingPending.body.files.length === 0, JSON.stringify(nothingPending.body.files));
+const usedAfterRefusals = (await api("/api/v1/licenses/status", { token })).body.relay_used as number;
+check(
+	"and none of them booked relay bytes that were never delivered",
+	usedAfterRefusals === usedBeforeCurl,
+	`${usedBeforeCurl} -> ${usedAfterRefusals}`,
+);
+
+// A password, which curl cannot derive a verifier for — so the server does it,
+// and it accepts the raw password either as a field before the file or as a
+// header, the latter because field order is a bad thing to make someone
+// discover after transferring a whole file.
+const curlSalt = (await api(`/api/v1/inboxes/${inboxId}/password-salt`, { method: "POST", token })).body
+	.salt as string;
+async function curlVerifier(password: string): Promise<string> {
+	const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, [
+		"deriveBits",
+	]);
+	const bits = await crypto.subtle.deriveBits(
+		{ name: "PBKDF2", hash: "SHA-256", salt: fromBase64Url(curlSalt), iterations: 210_000 },
+		key,
+		256,
+	);
+	return toHex(new Uint8Array(bits));
+}
+await api(`/api/v1/inboxes/${inboxId}`, {
+	method: "PATCH",
+	token,
+	body: JSON.stringify({ password: await curlVerifier("hunter2"), password_salt: curlSalt }),
+});
+
+const lockedCapabilities = await api(`${curlAddress}?format=json`);
+check("the capability document names the password field", lockedCapabilities.body?.upload?.passwordField === "password");
+check(
+	"and its curl command includes one",
+	/-F "password=/.test(lockedCapabilities.body?.curl ?? ""),
+	String(lockedCapabilities.body?.curl),
+);
+check(
+	"no password is refused",
+	(await curlUpload(curlAddress, "a.bin", new Uint8Array([1]))).status === 401,
+);
+check(
+	"the wrong password is refused",
+	(await curlUpload(curlAddress, "a.bin", new Uint8Array([1]), { fields: [["password", "nope"]] })).status === 401,
+);
+const withField = await curlUpload(curlAddress, "field.bin", new Uint8Array([1, 2, 3]), {
+	fields: [["password", "hunter2"]],
+});
+check("a password field before the file is accepted", withField.status === 202, JSON.stringify(withField.body));
+await api(`/api/v1/files/${(await api("/api/v1/pending", { token })).body.files[0].file_id}/ack`, {
+	method: "POST",
+	token,
+});
+const withHeader = await curlUpload(curlAddress, "header.bin", new Uint8Array([1, 2, 3]), {
+	headers: { "x-stolnk-password": "hunter2" },
+});
+check("and so is an X-Stolnk-Password header", withHeader.status === 202, JSON.stringify(withHeader.body));
+await api(`/api/v1/files/${(await api("/api/v1/pending", { token })).body.files[0].file_id}/ack`, {
+	method: "POST",
+	token,
+});
+await api(`/api/v1/inboxes/${inboxId}`, { method: "PATCH", token, body: JSON.stringify({ password: null }) });
+
+await api(`/api/v1/inboxes/${inboxId}`, { method: "PATCH", token, body: JSON.stringify({ paused: true }) });
+check(
+	"a paused inbox refuses this door too",
+	(await curlUpload(curlAddress, "p.bin", new Uint8Array([1]))).status === 423,
+);
+await api(`/api/v1/inboxes/${inboxId}`, { method: "PATCH", token, body: JSON.stringify({ paused: false }) });
 
 section("Pause and limits (PRD 13.4, 8.6 #3)");
 await api(`/api/v1/inboxes/${inboxId}`, {

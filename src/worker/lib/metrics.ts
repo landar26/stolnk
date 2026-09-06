@@ -35,6 +35,13 @@ export function transferStarted(fields: {
 	bytes: number;
 	sender_is_owner: boolean;
 	sub_inbox: boolean;
+	/**
+	 * Which client sent it. `curl` is the inbox address used as an API
+	 * (routes/inbox-address.ts) — the one path where the plaintext passes through
+	 * the Worker, so "is anyone actually using it" is a question worth being able
+	 * to answer before deciding how much to invest in it.
+	 */
+	via: "browser" | "curl";
 }): void {
 	emit("transfer.started", fields);
 }
