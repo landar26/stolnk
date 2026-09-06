@@ -103,7 +103,6 @@ export async function deriveVerifier(
 
 export interface TransferHandle {
 	transfer_id: string;
-	sender_session: string;
 	token: string;
 	expires_at: number;
 	part_size: number;

@@ -71,7 +71,7 @@ CREATE TABLE inboxes (
 );
 CREATE UNIQUE INDEX idx_inboxes_path ON inboxes (owner_device_id, path_slug);
 
--- One transfer == one sender session dropping a batch of files (13.2).
+-- One transfer == one batch of files dropped by one sender.
 CREATE TABLE transfers (
   transfer_id    TEXT PRIMARY KEY,
   inbox_id       TEXT NOT NULL,

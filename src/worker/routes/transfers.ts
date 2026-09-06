@@ -57,7 +57,6 @@ interface FileInit {
 interface InitBody {
 	inbox_id?: unknown;
 	password?: unknown;
-	sender_session?: unknown;
 	via?: unknown;
 	files?: unknown;
 }
@@ -213,10 +212,11 @@ transfers.post("/", async (c) => {
 	}
 
 	const transferId = randomId();
-	const senderSession =
-		typeof body.sender_session === "string" && body.sender_session.length <= 64
-			? body.sender_session
-			: randomId();
+	// Vestigial: `transfers.sender_session` is NOT NULL and used to key the
+	// remembered "always accept from this link" decisions. Those are gone, and
+	// dropping the column would mean rebuilding the largest table in the schema,
+	// so it is filled with a value nobody reads.
+	const senderSession = randomId();
 	// PRD 15.1 — a coarse "did the owner send this to themselves?" signal. It is
 	// a hint from the client, deliberately not a tracking mechanism.
 	const senderIsOwner = body.via === "app" ? 1 : 0;
@@ -230,7 +230,6 @@ transfers.post("/", async (c) => {
 		t: "upload",
 		transfer: transferId,
 		inbox: inboxId,
-		session: senderSession,
 		exp: now + UPLOAD_TOKEN_TTL_MS,
 	});
 
@@ -299,7 +298,6 @@ transfers.post("/", async (c) => {
 	return c.json(
 		{
 			transfer_id: transferId,
-			sender_session: senderSession,
 			token,
 			expires_at: expiresAt,
 			part_size: PART_SIZE,
@@ -403,19 +401,12 @@ transfers.post("/:tid/files/:fid/complete", async (c) => {
 		.run();
 
 	const owner = await c.env.DB.prepare(
-		`SELECT i.owner_device_id AS device_id, i.display_name, i.confirm_first, t.sender_session,
-		        t.inbox_id
+		`SELECT i.owner_device_id AS device_id, t.inbox_id
 		 FROM transfers t JOIN inboxes i ON i.inbox_id = t.inbox_id
 		 WHERE t.transfer_id = ?`,
 	)
 		.bind(transferId)
-		.first<{
-			device_id: string;
-			display_name: string;
-			confirm_first: number;
-			sender_session: string;
-			inbox_id: string;
-		}>();
+		.first<{ device_id: string; inbox_id: string }>();
 
 	if (owner) {
 		fileCompleted({
@@ -425,12 +416,6 @@ transfers.post("/:tid/files/:fid/complete", async (c) => {
 			transport: "relay",
 		});
 
-		const trusted = await c.env.DB.prepare(
-			"SELECT 1 AS x FROM trusted_senders WHERE inbox_id = ? AND sender_session = ?",
-		)
-			.bind(owner.inbox_id, owner.sender_session)
-			.first();
-		const needsConfirmation = !!owner.confirm_first && !trusted;
 		// Outlives this response deliberately: an asleep Mac simply finds it via
 		// /pending on waking, but a Mac that is awake must not have to wait out a
 		// polling interval for something it could have been told about.
@@ -440,19 +425,8 @@ transfers.post("/:tid/files/:fid/complete", async (c) => {
 				file_id: fileId,
 				transfer_id: transferId,
 				inbox_id: owner.inbox_id,
-				needs_confirmation: needsConfirmation,
 			}),
 		);
-		// "Uploaded" and "waiting on a person" are different things to be looking
-		// at, and only the sender can tell them apart from the copy.
-		if (needsConfirmation) {
-			pushInBackground(c.executionCtx, () =>
-				hubFor(c.env, owner.device_id).notifySender(transferId, {
-					type: "file.awaiting",
-					file_id: fileId,
-				}),
-			);
-		}
 	}
 
 	return c.json({ state: "ready" });

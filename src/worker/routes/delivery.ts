@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { CHUNK_SIZE } from "../limits";
 import { hubFor, pushInBackground, requireDevice } from "../lib/deviceauth";
-import { badRequest, notFound, readJson, type AppEnv } from "../lib/http";
+import { badRequest, notFound, type AppEnv } from "../lib/http";
 import { fileDelivered } from "../lib/metrics";
 
 /**
@@ -30,14 +30,11 @@ interface PendingRow {
 	plain_sha256: string;
 	created_at: number;
 	expires_at: number;
-	sender_session: string;
-	confirm_first: number;
-	trusted: number;
 }
 
 async function ownedFile(env: Env, deviceId: string, fileId: string) {
 	const row = await env.DB.prepare(
-		`SELECT f.*, t.inbox_id, t.sender_session, i.owner_device_id, i.confirm_first
+		`SELECT f.*, t.inbox_id, i.owner_device_id
 		 FROM files f
 		 JOIN transfers t ON t.transfer_id = f.transfer_id
 		 JOIN inboxes i ON i.inbox_id = t.inbox_id
@@ -50,7 +47,6 @@ async function ownedFile(env: Env, deviceId: string, fileId: string) {
 			r2_key: string;
 			state: string;
 			inbox_id: string;
-			sender_session: string;
 			cipher_size: number;
 			created_at: number;
 		}>();
@@ -68,9 +64,7 @@ delivery.get("/pending", async (c) => {
 		`SELECT f.file_id, f.transfer_id, t.inbox_id, i.display_name AS inbox_name,
 		        f.enc_name, f.name_iv, f.size, f.cipher_size, f.nonce_prefix,
 		        f.wrapped_key, f.key_iv, f.eph_pub, f.plain_sha256, f.created_at,
-		        t.expires_at, t.sender_session, i.confirm_first,
-		        (SELECT count(*) FROM trusted_senders ts
-		         WHERE ts.inbox_id = t.inbox_id AND ts.sender_session = t.sender_session) AS trusted
+		        t.expires_at
 		 FROM files f
 		 JOIN transfers t ON t.transfer_id = f.transfer_id
 		 JOIN inboxes i ON i.inbox_id = t.inbox_id
@@ -87,11 +81,6 @@ delivery.get("/pending", async (c) => {
 			transfer_id: row.transfer_id,
 			inbox_id: row.inbox_id,
 			inbox_name: row.inbox_name,
-			sender_session: row.sender_session,
-			// PRD 13.2 — confirm the first file of each new sending session, then
-			// stop asking. Silently writing a stranger's files to disk is the single
-			// most alarming thing this product could do.
-			needs_confirmation: !!row.confirm_first && !row.trusted,
 			enc_name: row.enc_name,
 			name_iv: row.name_iv,
 			size: row.size,
@@ -144,53 +133,6 @@ delivery.get("/files/:fid/content", async (c) => {
 		headers.set("content-length", String(file.cipher_size));
 	}
 	return new Response(object.body, { status, headers });
-});
-
-/** PRD 13.2 — accept this session, optionally for good. */
-delivery.post("/files/:fid/accept", async (c) => {
-	const deviceId = await requireDevice(c.env, c.req.raw);
-	const file = await ownedFile(c.env, deviceId, c.req.param("fid"));
-	const body = await readJson<{ always?: unknown }>(c).catch(() => ({ always: false }));
-
-	if (body.always === true) {
-		await c.env.DB.prepare(
-			"INSERT OR IGNORE INTO trusted_senders (inbox_id, sender_session, created_at) VALUES (?, ?, ?)",
-		)
-			.bind(file.inbox_id, file.sender_session, Date.now())
-			.run();
-	}
-
-	// Mirrors decline: without this the send page cannot distinguish "still
-	// waiting on a person" from "accepted, now downloading".
-	pushInBackground(c.executionCtx, () =>
-		hubFor(c.env, deviceId).notifySender(file.transfer_id, {
-			type: "file.accepted",
-			file_id: file.file_id,
-		}),
-	);
-	return c.json({ accepted: true });
-});
-
-delivery.post("/files/:fid/decline", async (c) => {
-	const deviceId = await requireDevice(c.env, c.req.raw);
-	const file = await ownedFile(c.env, deviceId, c.req.param("fid"));
-
-	try {
-		await c.env.RELAY.delete(file.r2_key);
-	} catch {
-		// Sweep will catch it.
-	}
-	await c.env.DB.prepare("UPDATE files SET state = 'declined' WHERE file_id = ?")
-		.bind(file.file_id)
-		.run();
-
-	pushInBackground(c.executionCtx, () =>
-		hubFor(c.env, deviceId).notifySender(file.transfer_id, {
-			type: "file.declined",
-			file_id: file.file_id,
-		}),
-	);
-	return c.json({ declined: true });
 });
 
 /**

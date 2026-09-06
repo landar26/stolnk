@@ -269,10 +269,14 @@ async function sweep(env: Env): Promise<void> {
  * when someone remembers to.
  *
  * Purely a D1 delete, and safely so: every terminal state releases its R2
- * object at the moment it becomes terminal — `declined` and the ACK path in
+ * object at the moment it becomes terminal — the ACK path in
  * `routes/delivery.ts`, `abort` in `routes/transfers.ts`, and the loop above
  * for `expired` — so there is no state this can reach in which an object is
  * still parked. The cascade takes `files` and `file_parts` with the transfer.
+ *
+ * `declined` is still in the filter below even though nothing writes it any
+ * more: rows from before the first-receive prompt was removed still carry it,
+ * and dropping it from the list would strand them here forever.
  *
  * What it deliberately does not touch is `usage_daily` and `usage_monthly`.
  * Those are accounting, keyed by inbox and by device rather than by transfer,
@@ -296,13 +300,6 @@ async function forgetOldRecords(env: Env, now: number): Promise<void> {
 	)
 		.bind(cutoff)
 		.run();
-
-	// A remembered "always accept from this link" decision is keyed by the
-	// sender's session id, and that id lives in their `sessionStorage` — it is
-	// gone when they close the tab. A row older than the retention window can
-	// therefore never match another upload again, which makes it dead data
-	// rather than a preference we would be discarding.
-	await env.DB.prepare("DELETE FROM trusted_senders WHERE created_at < ?").bind(cutoff).run();
 }
 
 export default {

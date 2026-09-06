@@ -709,7 +709,6 @@ check("complete succeeded", sent.complete?.status === 200, JSON.stringify(sent.c
 const pending = await api("/api/v1/pending", { token });
 check("file is waiting for the Mac", pending.status === 200 && pending.body.files.length === 1);
 const waiting = pending.body.files[0];
-check("first transfer of a session needs confirmation (PRD 13.2)", waiting.needs_confirmation === true);
 
 const macKey = await unwrapContentKey(
 	device.kex.privateKey,

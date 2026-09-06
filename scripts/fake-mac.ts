@@ -162,14 +162,6 @@ async function collect(): Promise<void> {
 	}
 
 	for (const file of pending.body?.files ?? []) {
-		if (file.needs_confirmation) {
-			await api(`/api/v1/files/${file.file_id}/accept`, {
-				method: "POST",
-				token,
-				body: JSON.stringify({ always: true }),
-			});
-		}
-
 		const ephemeral = await crypto.subtle.importKey(
 			"raw",
 			fromBase64Url(file.eph_pub),

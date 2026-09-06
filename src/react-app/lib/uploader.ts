@@ -53,7 +53,6 @@ export async function uploadFile(
 	inbox: InboxInfo,
 	options: {
 		password?: string;
-		senderSession?: string;
 		via?: string;
 		resume?: ResumeRecord;
 		signal?: AbortSignal;
@@ -100,7 +99,6 @@ export async function uploadFile(
 		const handle = await createTransfer({
 			inbox_id: inbox.inbox_id,
 			password: options.password,
-			sender_session: options.senderSession,
 			via: options.via,
 			files: [
 				{

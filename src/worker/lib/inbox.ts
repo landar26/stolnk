@@ -48,7 +48,6 @@ export interface InboxRow {
 	password_verifier_hash: string | null;
 	size_limit: number;
 	paused: number;
-	confirm_first: number;
 	created_at: number;
 }
 
@@ -160,16 +159,12 @@ export function inboxInsert(
 		password_verifier_hash: null,
 		size_limit: options.tier.maxFileSize,
 		paused: 0,
-		// Every name is guessable by construction now (PRD 13.1), so the
-		// first-receive prompt is load-bearing for everyone. Settings can still
-		// turn it off deliberately; nothing turns it off implicitly.
-		confirm_first: 1,
 		created_at: Date.now(),
 	};
 	const stmt = env.DB.prepare(
 		`INSERT INTO inboxes (inbox_id, owner_device_id, path_slug, display_name,
-		                      size_limit, paused, confirm_first, created_at)
-		 VALUES (?, ?, ?, ?, ?, 0, 1, ?)`,
+		                      size_limit, paused, created_at)
+		 VALUES (?, ?, ?, ?, ?, 0, ?)`,
 	).bind(
 		row.inbox_id,
 		row.owner_device_id,

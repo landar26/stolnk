@@ -19,7 +19,6 @@ export interface UploadToken {
 	t: "upload";
 	transfer: string;
 	inbox: string;
-	session: string;
 	exp: number;
 }
 

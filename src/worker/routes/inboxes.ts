@@ -32,7 +32,6 @@ export function present(name: string, row: InboxRow) {
 		url: inboxUrl(name, row.path_slug),
 		display_name: row.display_name,
 		paused: !!row.paused,
-		confirm_first: !!row.confirm_first,
 		size_limit: row.size_limit,
 		has_password: !!row.password_verifier_hash,
 	};
@@ -116,7 +115,6 @@ inboxes.patch("/:id", async (c) => {
 		display_name?: unknown;
 		slug?: unknown;
 		paused?: unknown;
-		confirm_first?: unknown;
 		password?: unknown;
 	}>(c);
 
@@ -146,13 +144,6 @@ inboxes.patch("/:id", async (c) => {
 		if (typeof body.paused !== "boolean") return badRequest('"paused" must be a boolean.');
 		updates.push("paused = ?");
 		values.push(body.paused ? 1 : 0);
-	}
-	if (body.confirm_first !== undefined) {
-		if (typeof body.confirm_first !== "boolean") {
-			return badRequest('"confirm_first" must be a boolean.');
-		}
-		updates.push("confirm_first = ?");
-		values.push(body.confirm_first ? 1 : 0);
 	}
 	// `password` carries a PBKDF2 verifier derived in the client, never the
 	// password itself (PRD 18). null clears it.
