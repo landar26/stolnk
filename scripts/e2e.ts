@@ -671,6 +671,348 @@ check(
 	`${usedAfterBooking} -> ${usedAfterAbort}`,
 );
 
+/*
+ * PRD 8.2 / M4 — LAN direct.
+ *
+ * None of this drives a real DataChannel: Node has no WebRTC, and the parts of
+ * the LAN path that can be got wrong on a server are not the SDP exchange, they
+ * are the money and the authorisation. So what is checked here is exactly the
+ * server's half — who may open a signalling socket, what it may push through
+ * it, that a LAN transfer books nothing and cannot touch the relay, and that
+ * abandoning one does not mint free allowance. The browser-to-Mac leg needs
+ * real hardware and is listed in the README as such.
+ */
+section("LAN direct signalling (PRD 8.2)");
+{
+	const wsBase = BASE.replace("http", "ws");
+	const open = (url: string) =>
+		new Promise<WebSocket | null>((resolve) => {
+			const socket = new WebSocket(url);
+			socket.addEventListener("open", () => resolve(socket));
+			socket.addEventListener("error", () => resolve(null));
+			setTimeout(() => resolve(socket.readyState === WebSocket.OPEN ? socket : null), 5000);
+		});
+	const next = (socket: WebSocket, predicate: (value: any) => boolean, ms = 3000) =>
+		new Promise<any>((resolve) => {
+			const onMessage = (event: MessageEvent) => {
+				if (typeof event.data !== "string" || event.data === "pong") return;
+				let parsed: any;
+				try {
+					parsed = JSON.parse(event.data);
+				} catch {
+					return;
+				}
+				if (!predicate(parsed)) return;
+				socket.removeEventListener("message", onMessage);
+				resolve(parsed);
+			};
+			socket.addEventListener("message", onMessage);
+			setTimeout(() => resolve(null), ms);
+		});
+
+	const offlineResolve = await api(on(NAME, "/api/v1/resolve?slug=inbox"));
+	check(
+		"no signal token while the Mac is asleep — nothing to negotiate with, and it wakes the DO",
+		offlineResolve.body.signal_token === undefined,
+		String(offlineResolve.body.signal_token),
+	);
+
+	const mac = await open(`${wsBase}/api/v1/ws/device?token=${token}`);
+	check("Mac socket connects", mac !== null);
+	await new Promise((r) => setTimeout(r, 300));
+
+	const onlineResolve = await api(on(NAME, "/api/v1/resolve?slug=inbox"));
+	const signalToken = onlineResolve.body.signal_token as string | undefined;
+	check("a signal token is issued once the Mac is awake", typeof signalToken === "string");
+
+	// No upgrade header: the route answers 401 before the Durable Object is ever
+	// reached, which is the property being checked. (undici refuses to send one.)
+	const forged = await fetch(`${BASE}/api/v1/ws/lan?token=not.a.token`);
+	check("a forged signal token is refused", forged.status === 401, String(forged.status));
+	const asUpload = await fetch(`${BASE}/api/v1/ws/lan?token=${booked.body.token}`);
+	check(
+		"an upload token cannot be spent as a signal token — the type is part of the signature",
+		asUpload.status === 401,
+		String(asUpload.status),
+	);
+
+	const sender = signalToken ? await open(`${wsBase}/api/v1/ws/lan?token=${signalToken}`) : null;
+	check("send page opens a signalling socket", sender !== null);
+
+	if (mac && sender) {
+		// Browser -> Mac. The session id is stamped by the DO from the socket's own
+		// attachment, so the sender never chooses it and cannot address another's.
+		const offered = next(mac, (event) => event.type === "signal");
+		sender.send(JSON.stringify({ type: "signal", payload: { kind: "offer", sdp: "v=0" } }));
+		const relayedOffer = await offered;
+		check(
+			"an offer reaches the Mac",
+			relayedOffer?.payload?.sdp === "v=0",
+			JSON.stringify(relayedOffer),
+		);
+		check(
+			"and carries a session id the sender never chose",
+			typeof relayedOffer?.session === "string" && relayedOffer.session.length > 0,
+		);
+
+		// Mac -> browser, addressed by that session id.
+		const answered = next(sender, (event) => event.type === "signal");
+		mac.send(
+			JSON.stringify({
+				type: "signal",
+				session: relayedOffer.session,
+				payload: { kind: "answer", sdp: "v=0-answer" },
+			}),
+		);
+		const relayedAnswer = await answered;
+		check(
+			"the answer comes back to the send page that offered",
+			relayedAnswer?.payload?.sdp === "v=0-answer",
+			JSON.stringify(relayedAnswer),
+		);
+
+		// A session id the Mac invents reaches nobody: the tag lookup is what makes
+		// echoing the id back safe.
+		const stray = next(sender, (event) => event.type === "signal", 600);
+		mac.send(
+			JSON.stringify({ type: "signal", session: "made-up", payload: { kind: "answer" } }),
+		);
+		check("a made-up session id addresses nobody", (await stray) === null);
+
+		// Cost fence (PRD 8.6 #1): every signalling message wakes the DO, and this
+		// socket is reachable by anyone holding the link.
+		const oversized = next(mac, (event) => event.type === "signal", 600);
+		sender.send(JSON.stringify({ type: "signal", payload: { pad: "x".repeat(9000) } }));
+		check("an oversized signalling message is dropped", (await oversized) === null);
+
+		for (let i = 0; i < 70; i++) {
+			sender.send(JSON.stringify({ type: "signal", payload: { kind: "ice", i } }));
+		}
+		await new Promise((r) => setTimeout(r, 400));
+		const flooded = next(mac, (event) => event.type === "signal", 600);
+		sender.send(JSON.stringify({ type: "signal", payload: { kind: "ice", last: true } }));
+		check("a send page past its signalling budget is cut off", (await flooded) === null);
+
+		/*
+		 * And the Mac is not charged for it. Its socket is one per device and
+		 * lives for as long as the app does, answering every negotiation it is
+		 * ever offered — so a budget shared across unrelated transfers would make
+		 * LAN work for the first few and then quietly stop. On a fallback path
+		 * that failure is invisible: everything keeps working, just slowly.
+		 */
+		// Past the page's ceiling, deliberately: the number only means something
+		// if the Mac has sent more than a send page is allowed to.
+		for (let i = 0; i < 70; i++) {
+			mac.send(
+				JSON.stringify({
+					type: "signal",
+					session: relayedOffer.session,
+					payload: { kind: "ice", i },
+				}),
+			);
+		}
+		await new Promise((r) => setTimeout(r, 400));
+		const stillAnswering = next(sender, (event) => event.payload?.sdp === "v=0-still-here");
+		mac.send(
+			JSON.stringify({
+				type: "signal",
+				session: relayedOffer.session,
+				payload: { kind: "answer", sdp: "v=0-still-here" },
+			}),
+		);
+		const late = await stillAnswering;
+		check(
+			"the Mac's own socket is never rate-limited — it answers for every session",
+			late?.payload?.sdp === "v=0-still-here",
+			JSON.stringify(late),
+		);
+
+		sender.close();
+	}
+	if (mac) mac.close();
+	await new Promise((r) => setTimeout(r, 300));
+}
+
+section("A LAN transfer never touches the relay (PRD 8.2, 16.2)");
+const lanInboxId = registered.body.inbox.inbox_id as string;
+const lanUsedBefore = (await api("/api/v1/licenses/status", { token })).body.relay_used as number;
+const lanTransfer = await api("/api/v1/transfers", {
+	method: "POST",
+	body: JSON.stringify({
+		inbox_id: lanInboxId,
+		transport: "lan",
+		files: [
+			{
+				enc_name: "x",
+				name_iv: "x",
+				size: 50 * 1024 * 1024,
+				nonce_prefix: "x",
+				wrapped_key: "x",
+				key_iv: "x",
+				eph_pub: "x",
+			},
+		],
+	}),
+});
+check("a LAN transfer is accepted", lanTransfer.status === 201, JSON.stringify(lanTransfer.body));
+const lanUsedAfter = (await api("/api/v1/licenses/status", { token })).body.relay_used as number;
+check(
+	"and books nothing against the month — PRD 16.2 promises the local path is free",
+	lanUsedAfter === lanUsedBefore,
+	`${lanUsedBefore} -> ${lanUsedAfter}`,
+);
+check(
+	"it is handed no parts to upload",
+	lanTransfer.body.files?.[0]?.part_count === 0,
+	String(lanTransfer.body.files?.[0]?.part_count),
+);
+
+const lanFileId = lanTransfer.body.files[0].file_id as string;
+const lanToken = lanTransfer.body.token as string;
+/*
+ * The claim `transport: "lan"` is taken from the client, which is only safe
+ * because of these two refusals: no multipart upload was created, so a sender
+ * who lied to skip the monthly allowance is holding a transfer it cannot put a
+ * byte into. This is the check that stands in for trusting the client.
+ */
+const lanPart = await fetch(
+	`${BASE}/api/v1/transfers/${lanTransfer.body.transfer_id}/files/${lanFileId}/parts/1`,
+	{
+		method: "PUT",
+		headers: { authorization: `Bearer ${lanToken}`, "content-length": "16" },
+		body: new Uint8Array(16),
+	},
+);
+check(
+	"claiming LAN buys no free relay bytes: parts are refused",
+	lanPart.status === 400,
+	String(lanPart.status),
+);
+const lanComplete = await api(
+	`/api/v1/transfers/${lanTransfer.body.transfer_id}/files/${lanFileId}/complete`,
+	{
+		method: "POST",
+		token: lanToken,
+		body: JSON.stringify({ plain_sha256: "0".repeat(64) }),
+	},
+);
+check("and so is completing it over the relay", lanComplete.status === 400, String(lanComplete.status));
+
+// PRD 16.2 — the local path stays open when the paid one has run out. This is
+// the whole reason the transport claim skips the allowance check rather than
+// merely skipping the booking.
+const overBudget = 20 * 1024 * 1024 * 1024;
+const relayOverBudget = await api("/api/v1/transfers", {
+	method: "POST",
+	body: JSON.stringify({
+		inbox_id: lanInboxId,
+		files: [
+			{
+				enc_name: "x",
+				name_iv: "x",
+				size: overBudget,
+				nonce_prefix: "x",
+				wrapped_key: "x",
+				key_iv: "x",
+				eph_pub: "x",
+			},
+		],
+	}),
+});
+check(
+	"a transfer past the monthly allowance is still refused over the relay",
+	relayOverBudget.status === 402 || relayOverBudget.status === 413,
+	String(relayOverBudget.status),
+);
+
+const lanMeta = await api(`/api/v1/files/${lanFileId}/meta`, { token });
+check("the Mac can read a LAN file's envelope before any byte arrives", lanMeta.status === 200);
+check(
+	"and the inbox it lands in comes from the server, not from the peer",
+	lanMeta.body?.file?.inbox_id === lanInboxId,
+	JSON.stringify(lanMeta.body),
+);
+const relayMeta = await api(`/api/v1/files/${booked.body.files?.[0]?.file_id}/meta`, { token });
+check(
+	"a relay file is not readable through the LAN metadata route",
+	relayMeta.status === 404,
+	String(relayMeta.status),
+);
+const unauthenticatedMeta = await api(`/api/v1/files/${lanFileId}/meta`);
+check("and the route is device-authenticated", unauthenticatedMeta.status === 401);
+
+// The Mac reports the digest it verified against the bytes it actually landed,
+// because on this path nobody else is in a position to.
+const lanAck = await api(`/api/v1/files/${lanFileId}/ack`, {
+	method: "POST",
+	token,
+	body: JSON.stringify({ plain_sha256: "a".repeat(64) }),
+});
+check("acking a LAN file delivers it", lanAck.status === 200 && lanAck.body.delivered === true);
+const lanUsedAfterAck = (await api("/api/v1/licenses/status", { token })).body.relay_used as number;
+check(
+	"delivering it still books nothing",
+	lanUsedAfterAck === lanUsedBefore,
+	`${lanUsedBefore} -> ${lanUsedAfterAck}`,
+);
+
+/*
+ * The failure this guards is silent and expensive: `refundRelayBytes` clamps at
+ * zero, so refunding a LAN transfer does not produce a negative counter — it
+ * quietly spends allowance that a *different* transfer booked in the same
+ * month. Booking a relay transfer first is what makes the theft visible.
+ */
+const guardBooked = await api("/api/v1/transfers", {
+	method: "POST",
+	body: JSON.stringify({
+		inbox_id: lanInboxId,
+		files: [
+			{
+				enc_name: "x",
+				name_iv: "x",
+				size: 30 * 1024 * 1024,
+				nonce_prefix: "x",
+				wrapped_key: "x",
+				key_iv: "x",
+				eph_pub: "x",
+			},
+		],
+	}),
+});
+const guardUsed = (await api("/api/v1/licenses/status", { token })).body.relay_used as number;
+const lanToAbandon = await api("/api/v1/transfers", {
+	method: "POST",
+	body: JSON.stringify({
+		inbox_id: lanInboxId,
+		transport: "lan",
+		files: [
+			{
+				enc_name: "x",
+				name_iv: "x",
+				size: 25 * 1024 * 1024,
+				nonce_prefix: "x",
+				wrapped_key: "x",
+				key_iv: "x",
+				eph_pub: "x",
+			},
+		],
+	}),
+});
+await api(`/api/v1/transfers/${lanToAbandon.body.transfer_id}/abort`, {
+	method: "POST",
+	token: lanToAbandon.body.token,
+});
+const guardAfter = (await api("/api/v1/licenses/status", { token })).body.relay_used as number;
+check(
+	"abandoning a LAN transfer refunds nothing — it never booked anything",
+	guardAfter === guardUsed,
+	`${guardUsed} -> ${guardAfter}`,
+);
+await api(`/api/v1/transfers/${guardBooked.body.transfer_id}/abort`, {
+	method: "POST",
+	token: guardBooked.body.token,
+});
+
 section("Inbox model and routing (PRD 6)");
 const second = await api("/api/v1/inboxes", {
 	method: "POST",

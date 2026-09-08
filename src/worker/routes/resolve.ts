@@ -4,6 +4,7 @@ import {
 	NOT_FOUND_DELAY_MS,
 	PART_SIZE,
 	RATE_MAX_RESOLVES,
+	SIGNAL_TOKEN_TTL_MS,
 } from "../limits";
 import { hubFor } from "../lib/deviceauth";
 import { relayUsed, tierFor } from "../lib/entitlement";
@@ -12,6 +13,7 @@ import { findInbox, requireSlug, type InboxRow } from "../lib/inbox";
 import { PBKDF2_ITERATIONS } from "../lib/password";
 import { enforce } from "../lib/ratelimit";
 import { inboxUrl, nameFromHost } from "../lib/site";
+import { signToken } from "../lib/tokens";
 
 /**
  * The one endpoint the send page needs before it can render. Public and
@@ -70,6 +72,35 @@ resolve.get("/", async (c) => {
 		online = false;
 	}
 
+	/*
+	 * PRD 8.2 — the credential for LAN signalling, handed out here rather than
+	 * with the upload token because the negotiation has to start before there is
+	 * a transfer to attach a token to. The send page begins gathering ICE
+	 * candidates the moment it renders, so by the time someone has picked a file
+	 * the DataChannel is usually already open and the 2 second race in PRD 8.1
+	 * never has to be run.
+	 *
+	 * Only when the Mac is awake. Offline there is nothing to negotiate with, and
+	 * withholding it means an unauthenticated caller cannot get something that
+	 * wakes a sleeping Durable Object.
+	 *
+	 * Failure is silent: LAN direct is an optimisation, and an inbox that cannot
+	 * sign one of these still accepts files perfectly well over the relay.
+	 */
+	let signalToken: string | undefined;
+	if (online) {
+		try {
+			signalToken = await signToken(c.env.SESSION_SECRET, {
+				t: "signal",
+				inbox: inbox.inbox_id,
+				device: inbox.owner_device_id,
+				exp: Date.now() + SIGNAL_TOKEN_TTL_MS,
+			});
+		} catch {
+			signalToken = undefined;
+		}
+	}
+
 	return c.json({
 		inbox_id: inbox.inbox_id,
 		name,
@@ -84,6 +115,7 @@ resolve.get("/", async (c) => {
 		chunk_size: CHUNK_SIZE,
 		ttl_hours: tier.ttlHours,
 		relay_available: relayAvailable,
+		signal_token: signalToken,
 		password: inbox.password_verifier_hash
 			? { required: true, salt: inbox.password_salt, iterations: PBKDF2_ITERATIONS }
 			: { required: false },
@@ -105,6 +137,8 @@ export interface ResolveResponse {
 	ttl_hours: number;
 	/** False once the owner's monthly relay allowance is spent (PRD 16.2). */
 	relay_available: boolean;
+	/** Present only while the Mac is awake: authorises `/api/v1/ws/lan` (PRD 8.2). */
+	signal_token?: string;
 	password: { required: boolean; salt?: string | null; iterations?: number };
 }
 

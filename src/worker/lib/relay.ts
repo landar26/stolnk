@@ -47,7 +47,8 @@ export interface PlannedFile {
 export interface OpenedFile {
 	file_id: string;
 	r2_key: string;
-	upload_id: string;
+	/** Null on a LAN transfer: there is no R2 multipart upload to push parts to. */
+	upload_id: string | null;
 	part_size: number;
 	part_count: number;
 }
@@ -81,6 +82,9 @@ export async function openTransfer(
 		/** PRD 15.1 — a hint from the client, deliberately not a tracking mechanism. */
 		senderIsOwner: boolean;
 		via: "browser" | "curl";
+		/** PRD 8.2 — "lan" skips the relay entirely. See the note below on why
+		 *  this one is safe to take from the client. */
+		transport?: "relay" | "lan";
 	},
 ): Promise<OpenedTransfer> {
 	const { inbox, planned } = options;
@@ -100,10 +104,24 @@ export async function openTransfer(
 
 	const totalBytes = planned.reduce((sum, file) => sum + file.size, 0);
 
-	// V1 has one path (PRD 8.2 / M4 was cut), so this is a constant rather than
-	// something the client asserts — a sender must not be able to send its
-	// transfer for free by claiming "lan".
-	const transport: "relay" | "lan" = "relay";
+	/*
+	 * PRD 8.2 — which of the two paths this transfer is taking.
+	 *
+	 * This *is* asserted by the client, which used to be the thing this comment
+	 * warned against: claiming "lan" skips the monthly relay allowance, so on the
+	 * face of it a sender could send for free by lying. It cannot, because the
+	 * claim is self-enforcing rather than trusted. A LAN transfer gets no R2
+	 * multipart upload, and `PUT …/parts/:n` refuses a file with no `upload_id`.
+	 * A liar therefore buys themselves a transfer they cannot put a single byte
+	 * into — and if they then want the relay, they create a second transfer and
+	 * meet the allowance exactly as before.
+	 *
+	 * The abuse ceilings below are deliberately *not* conditioned on this. Daily
+	 * caps and the pending-bytes ceiling are abuse control on one link, not
+	 * billing, and a LAN file occupies a delivery slot until it lands like any
+	 * other.
+	 */
+	const transport: "relay" | "lan" = options.transport === "lan" ? "lan" : "relay";
 	for (const file of planned) {
 		if (file.size > fileCap) {
 			return quotaExceeded(
@@ -201,16 +219,21 @@ export async function openTransfer(
 
 	await env.DB.prepare(
 		`INSERT INTO transfers (transfer_id, inbox_id, sender_session, state, total_bytes,
-		                        sender_is_owner, created_at, expires_at)
-		 VALUES (?, ?, ?, 'uploading', ?, ?, ?, ?)`,
+		                        sender_is_owner, created_at, expires_at, transport)
+		 VALUES (?, ?, ?, 'uploading', ?, ?, ?, ?, ?)`,
 	)
-		.bind(transferId, inboxId, senderSession, totalBytes, senderIsOwner, now, expiresAt)
+		.bind(transferId, inboxId, senderSession, totalBytes, senderIsOwner, now, expiresAt, transport)
 		.run();
 
 	const created: OpenedFile[] = [];
 	for (const file of planned) {
 		const key = r2Key(transferId, file.file_id);
-		const multipart = await env.RELAY.createMultipartUpload(key);
+		// No multipart upload on the LAN path: the ciphertext never reaches R2, so
+		// creating one would be a Class A operation spent on an object that is
+		// only ever going to be aborted (PRD 8.6 #2). The null `upload_id` is also
+		// what makes the client's transport claim above unforgeable.
+		const uploadId =
+			transport === "lan" ? null : (await env.RELAY.createMultipartUpload(key)).uploadId;
 		await env.DB.prepare(
 			`INSERT INTO files (file_id, transfer_id, r2_key, upload_id, enc_name, name_iv, size,
 			                    cipher_size, nonce_prefix, wrapped_key, key_iv, eph_pub,
@@ -221,7 +244,7 @@ export async function openTransfer(
 				file.file_id,
 				transferId,
 				key,
-				multipart.uploadId,
+				uploadId,
 				file.enc_name,
 				file.name_iv,
 				file.size,
@@ -236,9 +259,9 @@ export async function openTransfer(
 		created.push({
 			file_id: file.file_id,
 			r2_key: key,
-			upload_id: multipart.uploadId,
+			upload_id: uploadId,
 			part_size: PART_SIZE,
-			part_count: partCountFor(file.cipher_size),
+			part_count: transport === "lan" ? 0 : partCountFor(file.cipher_size),
 		});
 	}
 
@@ -262,6 +285,7 @@ export async function openTransfer(
 		sender_is_owner: senderIsOwner === 1,
 		sub_inbox: inbox.path_slug !== null,
 		via: options.via,
+		transport,
 	});
 
 	return { transferId, token, expiresAt, createdAt: now, files: created };
@@ -416,12 +440,12 @@ export async function abandonTransfer(env: Env, transferId: string): Promise<voi
 	// booked on the 31st and withdrawn on the 1st credits the month that charged
 	// it rather than handing the new month a discount.
 	const owner = await env.DB.prepare(
-		`SELECT i.owner_device_id AS device_id, t.created_at
+		`SELECT i.owner_device_id AS device_id, t.created_at, t.transport
 		 FROM transfers t JOIN inboxes i ON i.inbox_id = t.inbox_id
 		 WHERE t.transfer_id = ?`,
 	)
 		.bind(transferId)
-		.first<{ device_id: string; created_at: number }>();
+		.first<{ device_id: string; created_at: number; transport: string }>();
 
 	const undelivered = results
 		.filter((file) => file.state !== "delivered" && file.state !== "aborted")
@@ -435,7 +459,13 @@ export async function abandonTransfer(env: Env, transferId: string): Promise<voi
 			transferId,
 		),
 	];
-	if (owner && undelivered > 0) {
+	// Only a relay transfer booked anything, so only a relay transfer can be
+	// refunded. This condition is load-bearing rather than tidy: `refundRelayBytes`
+	// clamps at zero, which prevents a negative counter but does nothing to stop
+	// a refund for bytes that were never booked from consuming allowance a
+	// *different* transfer booked in the same month. Without it, abandoning LAN
+	// transfers is a way to mint free relay quota.
+	if (owner && owner.transport !== "lan" && undelivered > 0) {
 		writes.push(refundRelayBytes(env, owner.device_id, undelivered, utcMonth(owner.created_at)));
 	}
 	await env.DB.batch(writes);

@@ -61,6 +61,7 @@ interface InitBody {
 	inbox_id?: unknown;
 	password?: unknown;
 	via?: unknown;
+	transport?: unknown;
 	files?: unknown;
 }
 
@@ -128,6 +129,9 @@ transfers.post("/", async (c) => {
 		// PRD 15.1 — a coarse "did the owner send this to themselves?" signal.
 		senderIsOwner: body.via === "app",
 		via: "browser",
+		// PRD 8.2 — anything but the exact string is the relay. `openTransfer`
+		// explains why taking this from the client cannot buy free relay bytes.
+		transport: body.transport === "lan" ? "lan" : "relay",
 	});
 
 	return c.json(
@@ -167,9 +171,18 @@ transfers.put("/:tid/files/:fid/parts/:n", async (c) => {
 		"SELECT * FROM files WHERE file_id = ? AND transfer_id = ?",
 	)
 		.bind(fileId, transferId)
-		.first<{ r2_key: string; upload_id: string; state: string; cipher_size: number }>();
+		.first<{ r2_key: string; upload_id: string | null; state: string; cipher_size: number }>();
 	if (!file) return notFound("No such file in this transfer.");
 	if (file.state !== "uploading") return badRequest("This file is no longer accepting parts.");
+	/*
+	 * PRD 8.2 — a LAN transfer has no multipart upload to push into, and this is
+	 * the check that makes the client's `transport: "lan"` claim safe to trust:
+	 * a sender who lies to skip the monthly allowance ends up here, holding a
+	 * transfer that cannot take a single byte.
+	 */
+	if (!file.upload_id) {
+		return badRequest("This transfer is LAN-direct; its bytes do not go through the relay.");
+	}
 
 	const existing = await c.env.DB.prepare(
 		"SELECT etag FROM file_parts WHERE file_id = ? AND part_number = ?",
@@ -214,10 +227,15 @@ transfers.post("/:tid/files/:fid/complete", async (c) => {
 		"SELECT * FROM files WHERE file_id = ? AND transfer_id = ?",
 	)
 		.bind(fileId, transferId)
-		.first<{ r2_key: string; upload_id: string; state: string; cipher_size: number }>();
+		.first<{ r2_key: string; upload_id: string | null; state: string; cipher_size: number }>();
 	if (!file) return notFound("No such file in this transfer.");
 	if (file.state === "ready") return c.json({ state: "ready", already: true });
 	if (file.state !== "uploading") return badRequest("This file cannot be completed.");
+	// A LAN file is finished by the Mac's ACK, which is the only party that can
+	// say it actually arrived. There is nothing here to complete.
+	if (!file.upload_id) {
+		return badRequest("This transfer is LAN-direct; its bytes do not go through the relay.");
+	}
 
 	const { results } = await c.env.DB.prepare(
 		"SELECT part_number, etag FROM file_parts WHERE file_id = ? ORDER BY part_number ASC",

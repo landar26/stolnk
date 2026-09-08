@@ -42,6 +42,12 @@ export function transferStarted(fields: {
 	 * to answer before deciding how much to invest in it.
 	 */
 	via: "browser" | "curl";
+	/**
+	 * Which path it was opened for (PRD 8.2). Paired with `file.completed`, this
+	 * is what answers "what share of transfers actually went direct" — the number
+	 * that says whether the LAN path earned the framework it costs to ship.
+	 */
+	transport: "relay" | "lan";
 }): void {
 	emit("transfer.started", fields);
 }

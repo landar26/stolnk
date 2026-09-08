@@ -108,6 +108,13 @@ export const CHALLENGE_TTL_MS = 5 * 60 * 1000;
 export const DEVICE_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 /** 13.3 — upload session lifetime. */
 export const UPLOAD_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
+/**
+ * 8.2 — LAN signalling session lifetime. Short because `/api/v1/resolve` is
+ * unauthenticated: this is handed to anyone holding the link, and it is the one
+ * credential in the product that lets a stranger wake the owner's Durable
+ * Object. Long enough to pick files, not long enough to hoard.
+ */
+export const SIGNAL_TOKEN_TTL_MS = 5 * 60 * 1000;
 
 /** 13.3 — metadata field ceilings, enforced before anything touches the DB. */
 export const MAX_FILENAME_CIPHERTEXT = 2048;

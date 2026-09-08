@@ -34,9 +34,12 @@ import { COMPANY_EN, COMPANY_ZH } from "./contact.ts";
  *     exists, at which point it moves up into the table.
  *
  * The free column is likewise stated as what it is. PRD 16.2 argued the free
- * tier could be generous because LAN direct costs nothing to serve — but LAN
- * direct (M4) is not in V1, so free means 3 GB of relay a month and the page
- * says exactly that.
+ * tier could be generous because LAN direct costs nothing to serve, and it now
+ * exists (PRD 8.2) — but the allowance is still the honest headline number.
+ * Whether a given transfer takes the local path is decided by the network, not
+ * by the sender or by us, so "3 GB of relayed files a month" is the promise
+ * that holds in every case; a same-Wi-Fi transfer being free on top of it is a
+ * thing people discover, not a thing they are asked to plan around.
  */
 
 export const pagesEn = {

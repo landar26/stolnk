@@ -350,12 +350,18 @@ async function readAndRelay(
 		via: "curl",
 	});
 	const target = opened.files[0];
+	// The curl path is always the relay (it is the path that exists *because*
+	// the client cannot do WebRTC), so `openTransfer` always made a multipart
+	// upload for it. Narrowing rather than asserting, so a future caller that
+	// passes `transport: "lan"` here fails loudly instead of at `uploadPart`.
+	if (!target.upload_id) return badRequest("This inbox address does not accept LAN transfers.");
+	const uploadId = target.upload_id;
 
 	let size = sizeMax;
 	try {
 		const written = await encryptToR2(c.env, {
 			reader,
-			target,
+			target: { r2_key: target.r2_key, upload_id: uploadId },
 			contentKey,
 			noncePrefix: fromBase64Url(envelope.nonce_prefix),
 			fileId,
@@ -376,7 +382,7 @@ async function readAndRelay(
 			transferId: opened.transferId,
 			fileId,
 			r2Key: target.r2_key,
-			uploadId: target.upload_id,
+			uploadId,
 			parts: written.parts,
 			plainSha256: written.sha256,
 			cipherSize: cipherSizeFor(size),

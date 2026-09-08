@@ -22,7 +22,25 @@ export interface UploadToken {
 	exp: number;
 }
 
-export type TokenPayload = DeviceToken | UploadToken;
+/**
+ * Authorises a browser to exchange WebRTC signalling with one specific Mac,
+ * before any transfer exists (PRD 8.2).
+ *
+ * The chicken-and-egg this solves: an `UploadToken` is minted by
+ * `openTransfer`, so a socket authenticated with one cannot be opened until the
+ * transfer is already booked — far too late to be racing a 2 second LAN
+ * negotiation against it. This is handed out by `/api/v1/resolve` instead, to
+ * anyone holding the link, which is why it is short-lived and why `DeviceHub`
+ * caps how much signalling one socket may relay.
+ */
+export interface SignalToken {
+	t: "signal";
+	inbox: string;
+	device: string;
+	exp: number;
+}
+
+export type TokenPayload = DeviceToken | UploadToken | SignalToken;
 
 const encoder = new TextEncoder();
 const keyCache = new Map<string, Promise<CryptoKey>>();

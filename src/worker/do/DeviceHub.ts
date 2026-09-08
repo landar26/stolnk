@@ -19,14 +19,28 @@ import { DurableObject } from "cloudflare:workers";
  * ping does not even wake the object.
  */
 
-type Role = "device" | "sender";
+type Role = "device" | "sender" | "signal";
 
 interface Attachment {
 	role: Role;
 	deviceId: string;
 	/** Sender sockets only: the transfer they are watching. */
 	transferId?: string;
+	/** Signal sockets only: the LAN negotiation they belong to (PRD 8.2). */
+	sessionId?: string;
+	/** Signal sockets only: how much signalling this page has pushed through. */
+	signalCount?: number;
 }
+
+/**
+ * Cost fences on the signalling relay (PRD 8.6 #1). An idle socket hibernates
+ * and bills nothing; every *message* wakes the object, and `/api/v1/ws/lan` is
+ * reachable by anyone holding an inbox link. Host-candidate-only negotiation
+ * needs an offer, an answer and a handful of candidates — single digits — so a
+ * ceiling of 64 is far above any honest session and still bounds the bill.
+ */
+const MAX_SIGNAL_BYTES = 8 * 1024;
+const MAX_SIGNAL_MESSAGES = 64;
 
 export interface DeliveryEvent {
 	type: string;
@@ -46,25 +60,35 @@ export class DeviceHub extends DurableObject<Env> {
 		}
 
 		const url = new URL(request.url);
-		const role = url.searchParams.get("role") === "sender" ? "sender" : "device";
+		const requested = url.searchParams.get("role");
+		const role: Role = requested === "sender" ? "sender" : requested === "signal" ? "signal" : "device";
 		const deviceId = url.searchParams.get("device") ?? "";
 		const transferId = url.searchParams.get("transfer") ?? undefined;
+		const sessionId = url.searchParams.get("session") ?? undefined;
 
 		const pair = new WebSocketPair();
 		const client = pair[0];
 		const server = pair[1];
 
 		// Tags are how we find sockets again after hibernation.
-		const tags = [role];
+		const tags: string[] = [role];
 		if (role === "sender" && transferId) tags.push(`t:${transferId}`);
+		if (role === "signal" && sessionId) tags.push(`s:${sessionId}`);
 		this.ctx.acceptWebSocket(server, tags);
-		server.serializeAttachment({ role, deviceId, transferId } satisfies Attachment);
+		server.serializeAttachment({
+			role,
+			deviceId,
+			transferId,
+			sessionId,
+			signalCount: 0,
+		} satisfies Attachment);
 
-		if (role === "sender") {
-			// A sender's first question is always "is the Mac awake?" (PRD 11.1/11.2).
-			this.send(server, { type: "presence", online: this.isDeviceOnline() });
-		} else {
+		if (role === "device") {
 			this.broadcastPresence(true);
+		} else {
+			// A sender's first question is always "is the Mac awake?" (PRD 11.1/11.2),
+			// and a signal socket needs the same answer before it offers to nobody.
+			this.send(server, { type: "presence", online: this.isDeviceOnline() });
 		}
 
 		return new Response(null, { status: 101, webSocket: client });
@@ -72,21 +96,82 @@ export class DeviceHub extends DurableObject<Env> {
 
 	override async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
 		if (typeof message !== "string") return;
-		let parsed: { type?: string };
+		if (message.length > MAX_SIGNAL_BYTES) return;
+		let parsed: { type?: string; session?: unknown; payload?: unknown };
 		try {
 			parsed = JSON.parse(message);
 		} catch {
 			return;
 		}
+		const attachment = ws.deserializeAttachment() as Attachment | null;
+
 		// State changes go through the REST API so they are transactional against
-		// D1 and R2. The socket carries notifications only.
+		// D1 and R2. The socket carries notifications and WebRTC signalling only —
+		// and the signalling is relayed opaquely, so this object never has to know
+		// what an SDP offer or an ICE candidate is.
 		if (parsed.type === "hello") {
-			const attachment = ws.deserializeAttachment() as Attachment | null;
 			this.send(ws, {
 				type: "hello.ok",
 				role: attachment?.role ?? "device",
 				online: this.isDeviceOnline(),
 			});
+			return;
+		}
+
+		if (parsed.type === "signal") this.relaySignal(ws, attachment, parsed.session, parsed.payload);
+	}
+
+	/**
+	 * PRD 8.2 — carries the offer/answer/candidate exchange between one send page
+	 * and the Mac, in both directions.
+	 *
+	 * The session id is stamped from the socket's own attachment on the way out
+	 * and matched against a tag on the way back, so a sender can neither claim
+	 * another's session nor address anything except the device that issued its
+	 * token. `MAX_SIGNAL_MESSAGES` is the cost fence on the send page's side:
+	 * this is the one path into the object that an unauthenticated stranger can
+	 * reach, and every message through it wakes the object (PRD 8.6 #1).
+	 */
+	private relaySignal(
+		ws: WebSocket,
+		attachment: Attachment | null,
+		session: unknown,
+		payload: unknown,
+	): void {
+		if (!attachment || payload === undefined) return;
+
+		if (attachment.role === "signal") {
+			/*
+			 * The budget is charged to *send pages* only, never to the Mac.
+			 *
+			 * A signal socket is one page's one negotiation, reachable by anyone
+			 * holding the link, and it is finished after a handful of messages —
+			 * so a ceiling bounds a stranger without ever being met honestly. The
+			 * device socket is the opposite of all three: device-authenticated,
+			 * long-lived, and answering every session this Mac will ever be
+			 * offered. Charging it too would spend the budget across unrelated
+			 * transfers and then silently stop answering — LAN would work for the
+			 * first few negotiations after each reconnect and quietly stop, which
+			 * is the worst possible shape for a bug on a fallback path.
+			 */
+			const used = attachment.signalCount ?? 0;
+			if (used >= MAX_SIGNAL_MESSAGES) return;
+			ws.serializeAttachment({ ...attachment, signalCount: used + 1 } satisfies Attachment);
+
+			if (!attachment.sessionId) return;
+			for (const device of this.ctx.getWebSockets("device")) {
+				this.send(device, { type: "signal", session: attachment.sessionId, payload });
+			}
+			return;
+		}
+
+		// The Mac answering. It echoes back the session it was given; the tag
+		// lookup is what makes that safe — an id it invented reaches nobody.
+		if (attachment.role === "device") {
+			if (typeof session !== "string" || !session) return;
+			for (const sender of this.ctx.getWebSockets(`s:${session}`)) {
+				this.send(sender, { type: "signal", payload });
+			}
 		}
 	}
 
@@ -135,8 +220,13 @@ export class DeviceHub extends DurableObject<Env> {
 	}
 
 	private broadcastPresence(online: boolean): void {
-		for (const ws of this.ctx.getWebSockets("sender")) {
-			this.send(ws, { type: "presence", online });
+		// Signal sockets too: a send page that opened while the Mac was asleep uses
+		// this to start negotiating the moment it wakes, rather than deciding once
+		// at page load that LAN was impossible (PRD 8.2).
+		for (const tag of ["sender", "signal"]) {
+			for (const ws of this.ctx.getWebSockets(tag)) {
+				this.send(ws, { type: "presence", online });
+			}
 		}
 	}
 

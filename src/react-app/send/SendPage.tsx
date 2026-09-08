@@ -7,6 +7,8 @@ import {
 	type InboxInfo,
 } from "../lib/api.ts";
 import { formatBytes } from "../lib/format.ts";
+import { openLanSession, type LanSession } from "../lib/lan.ts";
+import { sendFileOverLan } from "../lib/lan-send.ts";
 import { listResumable, matches, type ResumeRecord } from "../lib/resume.ts";
 import { uploadFile, type UploadProgress } from "../lib/uploader.ts";
 
@@ -111,6 +113,11 @@ export function SendPage({ slug }: { slug: string }) {
 	const [delivered, setDelivered] = useState<Set<string>>(new Set());
 	const [resumable, setResumable] = useState<ResumeRecord[]>([]);
 	const [dragging, setDragging] = useState(false);
+	/** Which path the batch actually took, for the marker on the sending screen. */
+	const [transport, setTransport] = useState<"relay" | "lan">("relay");
+	/** Whether a DataChannel is open. Also decides whether a spent relay
+	 *  allowance is a refusal or merely the slower path being unavailable. */
+	const [lanReady, setLanReady] = useState(false);
 
 	const inputRef = useRef<HTMLInputElement>(null);
 	const resumeInputRef = useRef<HTMLInputElement>(null);
@@ -118,6 +125,7 @@ export function SendPage({ slug }: { slug: string }) {
 	const abort = useRef<AbortController | null>(null);
 	const stopWatching = useRef<(() => void) | null>(null);
 	const transfer = useRef<{ id: string; token: string } | null>(null);
+	const lan = useRef<LanSession | null>(null);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -135,6 +143,26 @@ export function SendPage({ slug }: { slug: string }) {
 				setOnline(result.inbox.online);
 				setScreen(result.inbox.password.required ? "locked" : "ready");
 				setResumable(await listResumable(result.inbox.slug));
+
+				/*
+				 * PRD 8.2 — start negotiating now, not when someone presses send.
+				 *
+				 * ICE with host candidates settles in well under a second on a LAN,
+				 * and choosing a file takes longer than that, so by send time the
+				 * answer is almost always already known. The two-second race in
+				 * PRD 8.1 is the fallback for the case where it is not.
+				 *
+				 * The token is absent whenever the Mac is asleep, which is also
+				 * exactly when there is nothing to negotiate with.
+				 */
+				const token = result.inbox.signal_token;
+				if (token) {
+					const session = openLanSession(token);
+					lan.current = session;
+					void session.ready.then((channel) => {
+						if (!cancelled) setLanReady(channel !== null);
+					});
+				}
 			} catch {
 				if (!cancelled) {
 					setTitle("This link is not active");
@@ -147,7 +175,13 @@ export function SendPage({ slug }: { slug: string }) {
 		};
 	}, [slug]);
 
-	useEffect(() => () => stopWatching.current?.(), []);
+	useEffect(
+		() => () => {
+			stopWatching.current?.();
+			lan.current?.close();
+		},
+		[],
+	);
 
 	const unlock = useCallback(async () => {
 		if (!inbox?.password.salt) return;
@@ -178,38 +212,79 @@ export function SendPage({ slug }: { slug: string }) {
 			}));
 			setFiles(initial);
 
+			/*
+			 * PRD 8.1 — try the direct path, give it two seconds, take the relay
+			 * otherwise. Resuming is relay-only (there are no parts to resume on a
+			 * DataChannel), so a resumed batch does not race at all.
+			 */
+			let channel: RTCDataChannel | null = null;
+			if (lan.current && !resume) {
+				channel = await Promise.race([
+					lan.current.ready,
+					new Promise<null>((settle) => setTimeout(() => settle(null), 2000)),
+				]);
+			}
+			setTransport(channel ? "lan" : "relay");
+
+			const via = new URLSearchParams(location.search).get("via") ?? "link";
+			const onProgress = (index: number) => (progress: UploadProgress) => {
+				setFiles((current) =>
+					current.map((entry, position) =>
+						position === index ? { ...entry, ...progress } : entry,
+					),
+				);
+			};
+			const onTransferCreated = (transferId: string, token: string) => {
+				transfer.current = { id: transferId, token };
+				stopWatching.current?.();
+				stopWatching.current = watchTransfer(token, (event) => {
+					if (event.type === "presence") setOnline(Boolean(event.online));
+					if (event.type === "file.delivered" && typeof event.file_id === "string") {
+						const id = event.file_id;
+						setDelivered((current) => new Set(current).add(id));
+					}
+				});
+			};
+
 			for (let index = 0; index < selected.length; index++) {
 				const file = selected[index];
+				const callbacks = { onProgress: onProgress(index), onTransferCreated };
+				const common = { password: verifier, via, signal: abort.current.signal };
 				try {
+					if (channel && channel.readyState === "open") {
+						try {
+							await sendFileOverLan(file, inbox, channel, common, callbacks);
+							continue;
+						} catch (lanFailure) {
+							// An abort is the sender's decision, not a transport failure.
+							if (abort.current?.signal.aborted) throw lanFailure;
+							/*
+							 * The direct path broke mid-file. There is nothing parked in R2
+							 * to continue from — that is what makes LAN cheap — so this file
+							 * starts again over the relay. It was a local transfer, so what
+							 * is being re-sent cost seconds.
+							 *
+							 * The transfer that was in flight is withdrawn rather than left
+							 * to expire, so it stops occupying the owner's pending quota.
+							 */
+							if (transfer.current) {
+								await abortTransfer(transfer.current.id, transfer.current.token).catch(() => {});
+							}
+							channel = null;
+							setTransport("relay");
+							setLanReady(false);
+							setFiles((current) =>
+								current.map((entry, position) =>
+									position === index ? { ...entry, sent: 0, phase: "encrypting" } : entry,
+								),
+							);
+						}
+					}
 					await uploadFile(
 						file,
 						inbox,
-						{
-							password: verifier,
-							via: new URLSearchParams(location.search).get("via") ?? "link",
-							resume: index === 0 ? resume : undefined,
-							signal: abort.current.signal,
-						},
-						{
-							onProgress: (progress) => {
-								setFiles((current) =>
-									current.map((entry, position) =>
-										position === index ? { ...entry, ...progress } : entry,
-									),
-								);
-							},
-							onTransferCreated: (transferId, token) => {
-								transfer.current = { id: transferId, token };
-								stopWatching.current?.();
-								stopWatching.current = watchTransfer(token, (event) => {
-									if (event.type === "presence") setOnline(Boolean(event.online));
-									if (event.type === "file.delivered" && typeof event.file_id === "string") {
-										const id = event.file_id;
-										setDelivered((current) => new Set(current).add(id));
-									}
-								});
-							},
-						},
+						{ ...common, resume: index === 0 ? resume : undefined },
+						callbacks,
 					);
 				} catch (failure) {
 					const message =
@@ -314,8 +389,12 @@ export function SendPage({ slug }: { slug: string }) {
 	}
 
 	/*
-	 * PRD 16.2 — the allowance ran out. Relay is the only transport in V1, so
-	 * nothing can be accepted until the month turns over or the owner upgrades.
+	 * PRD 16.2 — the allowance ran out.
+	 *
+	 * Only a refusal if the direct path is also unavailable. A spent allowance is
+	 * a fact about the *relay*, and a file that never touches the relay costs the
+	 * owner nothing — so on the same Wi-Fi this inbox still works perfectly, and
+	 * saying otherwise would be turning away a file we could deliver.
 	 *
 	 * Told as a fact about the inbox, not as a failure and not as an error: the
 	 * sender did nothing wrong, and they are a stranger who should not be reading
@@ -323,7 +402,7 @@ export function SendPage({ slug }: { slug: string }) {
 	 * to" is the whole of the escalation path, deliberately — they are the only
 	 * one who can act on it.
 	 */
-	if (!inbox.relay_available) {
+	if (!inbox.relay_available && !lanReady) {
 		return (
 			<main className="page">
 				<h1 className="inbox-title">{title}</h1>
@@ -497,9 +576,12 @@ export function SendPage({ slug }: { slug: string }) {
 							</div>
 							{/*
 							 * The transport marker is deliberately quiet: it tells you how it
-							 * went without asking you to care. Only the relay path exists today.
+							 * went without asking you to care. Nobody chose this and nobody
+							 * can — the network decided — so it is a note, not a control.
 							 */}
-							<span className="transport">☁ Encrypted relay</span>
+							<span className="transport">
+								{transport === "lan" ? "⚡ Direct — same network" : "☁ Encrypted relay"}
+							</span>
 							<div className="row" style={{ marginTop: 16 }}>
 								<button onClick={() => void cancel()}>Cancel upload</button>
 							</div>

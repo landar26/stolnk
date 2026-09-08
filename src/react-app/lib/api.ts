@@ -23,6 +23,11 @@ export interface InboxInfo {
 	 * to anyone holding the link.
 	 */
 	relay_available: boolean;
+	/**
+	 * Authorises `/api/v1/ws/lan` (PRD 8.2). Present only while the Mac is awake,
+	 * because that is the only time there is anything to negotiate with.
+	 */
+	signal_token?: string;
 	password: { required: boolean; salt?: string | null; iterations?: number };
 }
 

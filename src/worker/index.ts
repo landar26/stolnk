@@ -6,7 +6,7 @@ import { utcMonth, type AppEnv } from "./lib/http";
 import { TRANSFER_RECORD_TTL_MS } from "./limits";
 import { transferExpired } from "./lib/metrics";
 import { isInboxHost, rewriteInboxPreview } from "./lib/preview";
-import { verifyToken, type DeviceToken, type UploadToken } from "./lib/tokens";
+import { verifyToken, type DeviceToken, type SignalToken, type UploadToken } from "./lib/tokens";
 import { checkout } from "./routes/checkout";
 import { delivery } from "./routes/delivery";
 import { devices, names } from "./routes/devices";
@@ -175,6 +175,32 @@ app.get("/api/v1/ws/sender", async (c) => {
 });
 
 /**
+ * PRD 8.2 — WebRTC signalling for a LAN direct transfer. Separate from
+ * `/ws/sender` because it has to be openable *before* a transfer exists: the
+ * whole point is that the DataChannel is already negotiated by the time someone
+ * presses send.
+ *
+ * The session id is minted here and never read from the client, so one sender
+ * cannot address another's negotiation. `DeviceHub` bounds what a socket may
+ * push through it, because the token behind this route is handed to anyone
+ * holding the link.
+ */
+app.get("/api/v1/ws/lan", async (c) => {
+	const payload = await verifyToken<SignalToken>(
+		c.env.SESSION_SECRET,
+		c.req.query("token"),
+		"signal",
+	);
+	if (!payload) return c.text("unauthorized", 401);
+
+	const url = new URL(c.req.url);
+	url.searchParams.set("role", "signal");
+	url.searchParams.set("device", payload.device);
+	url.searchParams.set("session", crypto.randomUUID());
+	return c.env.HUB.get(c.env.HUB.idFromName(payload.device)).fetch(new Request(url, c.req.raw));
+});
+
+/**
  * Everything the routes above did not claim, which under
  * `run_worker_first: true` means the static site as well as unknown paths.
  *
@@ -243,7 +269,7 @@ async function sweep(env: Env): Promise<void> {
 
 	const { results } = await env.DB.prepare(
 		`SELECT f.file_id, f.r2_key, f.upload_id, f.size, t.inbox_id, t.created_at,
-		        i.owner_device_id
+		        t.transport, i.owner_device_id
 		 FROM files f
 		 JOIN transfers t ON t.transfer_id = f.transfer_id
 		 JOIN inboxes i ON i.inbox_id = t.inbox_id
@@ -258,6 +284,7 @@ async function sweep(env: Env): Promise<void> {
 			size: number;
 			inbox_id: string;
 			created_at: number;
+			transport: string;
 			owner_device_id: string;
 		}>();
 
@@ -276,12 +303,21 @@ async function sweep(env: Env): Promise<void> {
 		// TTL running out is not a delivery, so they come back. Booked against the
 		// month the transfer was created in, which is often not this one — that is
 		// the whole reason a 24 hour TTL can straddle a month boundary.
-		await env.DB.batch([
+		//
+		// And, exactly as in `abandonTransfer`, only for a transfer that booked
+		// something. A LAN transfer never charged the month, so "giving back" its
+		// bytes would take them from whatever else booked that month.
+		const writes = [
 			env.DB.prepare("UPDATE files SET state = 'expired', upload_id = NULL WHERE file_id = ?").bind(
 				file.file_id,
 			),
-			refundRelayBytes(env, file.owner_device_id, file.size, utcMonth(file.created_at)),
-		]);
+		];
+		if (file.transport !== "lan") {
+			writes.push(
+				refundRelayBytes(env, file.owner_device_id, file.size, utcMonth(file.created_at)),
+			);
+		}
+		await env.DB.batch(writes);
 		transferExpired({ inbox_id: file.inbox_id, bytes: file.size });
 	}
 
