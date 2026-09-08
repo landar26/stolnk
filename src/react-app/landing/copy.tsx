@@ -159,6 +159,39 @@ const en = {
 		figureCipher: "8f3ac91e2b7d40f6…",
 	},
 
+	/*
+	 * The address used as an API. It sits between the encryption section and the
+	 * feature list on purpose — see `Landing.tsx` — because the third card
+	 * qualifies the claim the section above it makes, and a caveat that drifts
+	 * away from its claim reads as a retraction later on.
+	 *
+	 * "95 MiB" is `MAX_CURL_UPLOAD_BYTES` in worker/limits.ts, where the
+	 * arithmetic behind it lives. This dictionary cannot import from the worker,
+	 * so the two move together by hand; `SendPage.tsx` carries the same number as
+	 * `CURL_MAX_MIB` for the same reason.
+	 */
+	terminal: {
+		title: "The same link, from a terminal.",
+		lede: "An inbox address is an API as well as a page. A script, a build job or an AI agent can use the link it was handed and nothing else — there is no key to issue and no endpoint to look up.",
+		cards: [
+			{
+				title: "One command",
+				body: "curl, with the file and the address. No SDK, no token, no account. The URL is the whole interface.",
+			},
+			{
+				title: "It describes itself",
+				body: "Ask the same address for JSON and it answers with the field name, the limits and a command ready to run — so an agent given a bare link can work out the rest on its own.",
+			},
+			{
+				title: "The trade, stated",
+				body: "This route is encrypted on our server with your Mac's public key, not in the sender's browser. Up to 95 MiB, one file per request.",
+			},
+		],
+		link: "What that costs you →",
+		figureCommand: 'curl -F "file=@shoot-0913.mov" ryan.stolnk.com/client-a',
+		figureReply: "202 · Accepted. It will be delivered when Ryan's Mac next wakes up.",
+	},
+
 	features: {
 		title: "What it actually does",
 		lede: "A menu bar app, a link, and a folder. The list is short because the product is.",
@@ -239,6 +272,10 @@ const en = {
 			{
 				q: "Does the sender need an account, or an app?",
 				a: "Neither. They open the link in any modern browser and drop a file in. There is nothing to install and nothing to sign up for — that is the reason the product exists in this shape.",
+			},
+			{
+				q: "Can a script or an AI agent send me files?",
+				a: "Yes — the link is the whole API. POST a file to the address with curl and it lands in the folder, and asking that address for JSON tells the caller how. The one difference from the browser: on that route the file is encrypted on our server with your Mac's public key rather than in the sender's browser, so it passes through us readable for the length of one request. Up to 95 MiB, one file per request.",
 			},
 			{
 				q: "What happens if my Mac is asleep?",
@@ -509,6 +546,28 @@ const zh: Dict = {
 		figureCipher: "8f3ac91e2b7d40f6…",
 	},
 
+	terminal: {
+		title: "同一条链接，在终端里。",
+		lede: "收件地址既是一个页面，也是一个 API。脚本、构建任务、AI agent，拿着别人给的那条链接就够了——没有要申请的密钥，也没有要查的接口地址。",
+		cards: [
+			{
+				title: "一条命令",
+				body: "curl，加上文件和地址。没有 SDK，没有令牌，没有账号。这个 URL 就是接口本身。",
+			},
+			{
+				title: "它会自我描述",
+				body: "向同一个地址要 JSON，它会回答字段名、各项上限，以及一条可以直接运行的命令——所以一个只拿到光秃秃链接的 agent，能自己把剩下的推出来。",
+			},
+			{
+				title: "代价，明说",
+				body: "这条路是在我们服务器上用你 Mac 的公钥加密的，不是在发送方浏览器里。单个文件最大 95 MiB，每次请求一个文件。",
+			},
+		],
+		link: "这要付出什么 →",
+		figureCommand: 'curl -F "file=@shoot-0913.mov" ryan.stolnk.com/client-a',
+		figureReply: "202 · 已接收。等 Ryan 的 Mac 醒来就会送达。",
+	},
+
 	features: {
 		title: "它到底做什么",
 		lede: "一个菜单栏 App，一条链接，一个文件夹。清单很短，因为产品本身就很短。",
@@ -583,6 +642,10 @@ const zh: Dict = {
 			{
 				q: "发送方需要账号或者 App 吗？",
 				a: "都不需要。用任意现代浏览器打开链接，把文件拖进去就行。没有要装的东西，也没有要注册的东西——产品做成这个样子，原因就在这里。",
+			},
+			{
+				q: "脚本或者 AI agent 能给我发文件吗？",
+				a: "能——那条链接本身就是完整的 API。用 curl 把文件 POST 到这个地址，它就会落进文件夹；向同一个地址要 JSON，它会告诉调用方该怎么发。跟浏览器唯一的区别是：走这条路时，文件是在我们服务器上用你 Mac 的公钥加密的，而不是在发送方浏览器里，所以它会以可读的形式在我们这里停留一次请求那么久。单个文件最大 95 MiB，每次请求一个文件。",
 			},
 			{
 				q: "如果我的 Mac 正在睡觉会怎样？",

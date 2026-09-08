@@ -7,7 +7,12 @@ import { PricingTeaser } from "./sections/PricingTeaser.tsx";
 import { Roadmap } from "./sections/Roadmap.tsx";
 import { Scenarios } from "./sections/Scenarios.tsx";
 import { Showcase } from "./sections/Showcase.tsx";
-import { CryptoFigure, RoutingFigure, SleepFigure } from "./sections/figures.tsx";
+import {
+	CryptoFigure,
+	RoutingFigure,
+	SleepFigure,
+	TerminalFigure,
+} from "./sections/figures.tsx";
 
 /**
  * PRD 21 — the landing page.
@@ -68,6 +73,29 @@ export function Landing() {
 				figure={
 					<div className="figure-slot">
 						<CryptoFigure plain={t.crypto.figurePlain} cipher={t.crypto.figureCipher} />
+					</div>
+				}
+			/>
+
+			{/*
+			 * Directly under the encryption section, and not later. Its third card
+			 * says this route is encrypted on our server rather than in the sender's
+			 * browser, which is exactly the claim the section above it makes — and a
+			 * caveat parked further down the page reads as a retraction of something
+			 * the reader has already accepted.
+			 */}
+			<Showcase
+				id="terminal"
+				title={t.terminal.title}
+				lede={t.terminal.lede}
+				cards={t.terminal.cards}
+				link={{ label: t.terminal.link, href: "/how-it-works" }}
+				figure={
+					<div className="figure-slot">
+						<TerminalFigure
+							command={t.terminal.figureCommand}
+							reply={t.terminal.figureReply}
+						/>
 					</div>
 				}
 			/>

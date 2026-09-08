@@ -217,8 +217,11 @@ export async function inboxUpload(c: Context<AppEnv>): Promise<Response> {
 		);
 	}
 
-	// Everything cheap happens before the body is touched, so a refusal does not
-	// require the sender to push 95 MiB first.
+	// The cheap checks run before the body is parsed. Deliberately not sold as
+	// "refused before a byte arrives": whether the sender is spared the upload is
+	// the platform's decision, not this handler's — Cloudflare enforces its own
+	// 100 MB limit at the edge, and locally the dev server does not hand the
+	// request over until the body has landed.
 	const declared = Number(c.req.header("content-length") ?? "-1");
 	if (!Number.isInteger(declared) || declared < 0) {
 		return badRequest(

@@ -1407,6 +1407,44 @@ a.button.large {
 }
 
 /*
+ * The home page's terminal diagram. The one figure on the page that is meant to
+ * be copied rather than read, so it is left-aligned where its neighbours are
+ * centred, and the command scrolls inside its own box — a shell line is longer
+ * than the column and the page body must never scroll sideways for it.
+ */
+.terminal-figure {
+	text-align: left;
+}
+
+.terminal-command {
+	display: flex;
+	gap: 8px;
+	align-items: baseline;
+	padding: 14px 16px;
+	border: 1px dashed var(--border);
+	border-radius: 7px;
+	background: var(--surface-2);
+	overflow-x: auto;
+}
+
+.terminal-command code {
+	color: var(--text);
+	white-space: pre;
+	font-size: 1em;
+}
+
+.terminal-prompt {
+	color: var(--text-dim);
+	user-select: none;
+}
+
+/* Prose, not a path — it wraps where the other figure targets do not. */
+.terminal-reply {
+	text-align: center;
+	overflow-wrap: anywhere;
+}
+
+/*
  * The terminal / agent section on the send page. Collapsed by default: the
  * reader of a link they were handed is almost never looking for a command line,
  * but the ones who are should not have to guess that the address is also an API.

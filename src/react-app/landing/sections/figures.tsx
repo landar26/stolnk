@@ -1,5 +1,5 @@
 /**
- * The three diagrams on the home page.
+ * The diagrams on the home page.
  *
  * They are CSS rather than video or screenshots for two reasons. The obvious
  * one is that there is no product footage to ship. The better one is that the
@@ -90,6 +90,32 @@ export function CryptoFigure({ plain, cipher }: { plain: string; cipher: string 
 			<Pipe short />
 			<div className="figure-line figure-target">
 				<b>~/Projects/ClientA/Incoming</b>
+			</div>
+		</figure>
+	);
+}
+
+/**
+ * The address used as an API: the command, and the reply it gets back.
+ *
+ * Left-aligned rather than centred like its neighbours, because a shell command
+ * that is centred stops reading as a shell command — and it is the one figure on
+ * the page whose content is meant to be copied rather than looked at. It is also
+ * the only one wider than the column, so the command scrolls inside its own box;
+ * the page must not scroll sideways because of it.
+ */
+export function TerminalFigure({ command, reply }: { command: string; reply: string }) {
+	return (
+		<figure className="figure terminal-figure">
+			<div className="terminal-command">
+				<span className="terminal-prompt" aria-hidden="true">
+					$
+				</span>
+				<code>{command}</code>
+			</div>
+			<Pipe short />
+			<div className="figure-line figure-target terminal-reply">
+				<b>{reply}</b>
 			</div>
 		</figure>
 	);
