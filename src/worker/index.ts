@@ -3,7 +3,12 @@ import { HTTPException } from "hono/http-exception";
 import { hubFor } from "./lib/deviceauth";
 import { refundRelayBytes } from "./lib/entitlement";
 import { utcMonth, type AppEnv } from "./lib/http";
-import { TRANSFER_RECORD_TTL_MS } from "./limits";
+import {
+	SHARE_CODE_ROUTE,
+	SHARE_RECORD_TTL_MS,
+	TRANSFER_RECORD_TTL_MS,
+	UPLOAD_TOKEN_TTL_MS,
+} from "./limits";
 import { transferExpired } from "./lib/metrics";
 import { isInboxHost, rewriteInboxPreview } from "./lib/preview";
 import { verifyToken, type DeviceToken, type SignalToken, type UploadToken } from "./lib/tokens";
@@ -14,6 +19,9 @@ import { inboxCapabilities, inboxUpload, wantsCapabilities } from "./routes/inbo
 import { inboxes } from "./routes/inboxes";
 import { licenses } from "./routes/licenses";
 import { downloads, release } from "./routes/releases";
+import { shareLink } from "./routes/share-link";
+import { shareDownload, shareLanding } from "./routes/share-public";
+import { shares } from "./routes/shares";
 import { resolve } from "./routes/resolve";
 import { transfers } from "./routes/transfers";
 import { waitlist } from "./routes/waitlist";
@@ -99,6 +107,8 @@ app.route("/api/v1/inboxes", inboxes);
 app.route("/api/v1/names", names);
 app.route("/api/v1/resolve", resolve);
 app.route("/api/v1/transfers", transfers);
+app.route("/api/v1/shares", shares);
+app.route("/api/v1/share-link", shareLink);
 app.route("/api/v1/licenses", licenses);
 app.route("/api/v1/checkout", checkout);
 app.route("/api/v1/release", release);
@@ -112,6 +122,8 @@ app.route("/api/v1", delivery);
 // SPA fallback below; only /download/mac and /download/mac/<file> are claimed,
 // leaving bare /download to the page that links to them.
 app.route("/download", downloads);
+app.get(`/:code{${SHARE_CODE_ROUTE}}`, shareLanding);
+app.get(`/:code{${SHARE_CODE_ROUTE}}/:filename`, shareDownload);
 
 /**
  * The inbox address used as an API rather than as a page (PRD 1.2 is silent on
@@ -126,11 +138,13 @@ app.route("/download", downloads);
  * fallback below exactly as before.
  */
 app.post("*", (c) => {
+	if (c.req.path.startsWith("/~")) return c.json({ error: "not_found", message: "No such endpoint." }, 404);
 	if (c.req.path.startsWith("/api/") || !isInboxHost(c.req.url)) return c.notFound();
 	return inboxUpload(c);
 });
 
 app.options("*", (c) => {
+	if (c.req.path.startsWith("/~")) return c.json({ error: "not_found", message: "No such endpoint." }, 404);
 	if (c.req.path.startsWith("/api/") || !isInboxHost(c.req.url)) return c.notFound();
 	return inboxCapabilities(c);
 });
@@ -328,7 +342,47 @@ async function sweep(env: Env): Promise<void> {
 		.bind(now)
 		.run();
 
+	await sweepShares(env, now);
+
 	await forgetOldRecords(env, now);
+}
+
+async function sweepShares(env: Env, now: number): Promise<void> {
+	const { results: uploads } = await env.DB.prepare(
+		`SELECT * FROM shares WHERE state = 'uploading' AND created_at < ? LIMIT 500`,
+	)
+		.bind(now - UPLOAD_TOKEN_TTL_MS)
+		.all<{
+			share_id: string; owner_device_id: string; r2_key: string; upload_id: string | null;
+			size: number; created_at: number;
+		}>();
+	for (const share of uploads) {
+		try {
+			if (share.upload_id) await env.RELAY.resumeMultipartUpload(share.r2_key, share.upload_id).abort();
+		} catch {
+			// Already gone.
+		}
+		await env.DB.batch([
+			env.DB.prepare("UPDATE shares SET state = 'aborted', upload_id = NULL WHERE share_id = ? AND state = 'uploading'").bind(share.share_id),
+			refundRelayBytes(env, share.owner_device_id, share.size, utcMonth(share.created_at)),
+		]);
+	}
+
+	const { results: finished } = await env.DB.prepare(
+		`SELECT share_id, r2_key FROM shares
+		 WHERE (expires_at < ? AND state = 'ready') OR state IN ('spent', 'revoked')
+		 LIMIT 500`,
+	)
+		.bind(now)
+		.all<{ share_id: string; r2_key: string }>();
+	for (const share of finished) {
+		await env.RELAY.delete(share.r2_key).catch(() => undefined);
+		// Unlike an undelivered inbox transfer, a share served its purpose while
+		// published. Expiry/revocation never returns the upload allowance.
+		await env.DB.prepare("UPDATE shares SET state = 'expired', upload_id = NULL WHERE share_id = ?")
+			.bind(share.share_id)
+			.run();
+	}
 }
 
 /**
@@ -372,6 +426,16 @@ async function forgetOldRecords(env: Env, now: number): Promise<void> {
 		 )`,
 	)
 		.bind(cutoff)
+		.run();
+
+	await env.DB.prepare(
+		`DELETE FROM shares WHERE share_id IN (
+		   SELECT share_id FROM shares
+		   WHERE state IN ('spent', 'revoked', 'expired', 'aborted') AND created_at < ?
+		   LIMIT 500
+		 )`,
+	)
+		.bind(now - SHARE_RECORD_TTL_MS)
 		.run();
 }
 

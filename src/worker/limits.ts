@@ -36,6 +36,11 @@ export interface Tier {
 	dailyBytes: number;
 	/** 16.1 — monthly relayed bytes. Exhausting it disables relay, not service. */
 	monthlyRelayBytes: number;
+	/** Outbound links have their own storage ceiling so they cannot starve inbox delivery. */
+	shareStorageQuota: number;
+	maxShareTtlHours: number;
+	maxActiveShares: number;
+	sharePassword: boolean;
 }
 
 export const FREE: Tier = {
@@ -47,6 +52,10 @@ export const FREE: Tier = {
 	dailyFiles: 200,
 	dailyBytes: 3 * 1024 ** 3,
 	monthlyRelayBytes: 3 * 1024 ** 3,
+	shareStorageQuota: 2 * 1024 ** 3,
+	maxShareTtlHours: 24,
+	maxActiveShares: 3,
+	sharePassword: false,
 };
 
 export const PRO: Tier = {
@@ -58,7 +67,31 @@ export const PRO: Tier = {
 	dailyFiles: 5000,
 	dailyBytes: 300 * 1024 ** 3,
 	monthlyRelayBytes: 300 * 1024 ** 3,
+	// At R2's $0.015/GB-month, 20 GiB is about $0.30/month and leaves over ten
+	// years of storage headroom in a $39 lifetime purchase. 50 GiB would be
+	// about $0.75/month and reduce that margin to only 52 months.
+	shareStorageQuota: 20 * 1024 ** 3,
+	maxShareTtlHours: 720,
+	maxActiveShares: 100,
+	sharePassword: true,
 };
+
+export const SHARE_TTL_PRESETS = [1, 24, 168, 720] as const;
+export const SHARE_CODE_LENGTH = 16;
+/** Public promise: terminal share metadata, including its plaintext name, lasts seven days. */
+export const SHARE_RECORD_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+export const SHARE_TOKEN_TTL_MS = 10 * 60 * 1000;
+export const RATE_MAX_SHARE_UNLOCK = 10;
+export const RATE_MAX_SHARE_DOWNLOADS = 60;
+/**
+ * Landing pages and metadata lookups. Sized like downloads rather than like
+ * unlock: both are the *recipient's* budget and a shared office NAT opens one
+ * link many times, whereas unlock's 10 is guarding a password. It exists at all
+ * because a chosen share path is guessable — a random one made enumeration
+ * pointless, so neither endpoint used to need a bucket.
+ */
+export const RATE_MAX_SHARE_LOOKUPS = 60;
+export const MAX_SHARE_FILENAME = 200;
 
 /**
  * 16.1 — activations per licence. Creem is told the same number when the
@@ -82,6 +115,30 @@ export const PRO_SEATS = 3;
 export const NAME_RE = /^[a-z0-9][a-z0-9-]{1,18}[a-z0-9]$/;
 /** 6.2 — sub-inbox path segment. */
 export const SLUG_RE = /^[a-z0-9-]{1,32}$/;
+
+/**
+ * A share path the owner chose instead of `randomSlug(SHARE_CODE_LENGTH)`.
+ *
+ * One segment, not three like an inbox path (`validateSlug` in lib/inbox.ts):
+ * `/~<code>/<filename>` already spends the second segment on the filename, and
+ * the web router reads only `path.split("/")[0]` after the tilde.
+ *
+ * Three characters minimum. `~a` is not a name anyone chose, it is the whole
+ * keyspace typed out by hand.
+ *
+ * There is deliberately no reserved-word list. `RESERVED_SLUG_HEADS` exists
+ * because an inbox path sits directly under the API and the built assets, which
+ * the platform serves on every hostname; nothing at all is served inside `~`,
+ * so `~api` collides with nothing. This is a decision, not an omission.
+ */
+export const SHARE_CODE_RE = /^[a-z0-9-]{3,32}$/;
+/**
+ * The router's copy of the grammar above, deliberately wider. A code that is
+ * too short or malformed has to arrive at the handler and miss, the way
+ * `e2e.ts` insists a malformed inbox slug is "a miss, not a 400" — routing it
+ * away would turn a wrong guess into a different answer than a wrong file.
+ */
+export const SHARE_CODE_ROUTE = "~[a-z0-9-]{1,32}";
 
 /**
  * How long a finished transfer's metadata row survives.

@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { FREE, PRO, PRO_SEATS, RATE_MAX_LICENSE } from "../limits";
 import { activate, deactivate, keyHash, CreemError } from "../lib/creem";
 import { requireDevice } from "../lib/deviceauth";
-import { applyTierToInboxes, pauseInboxesOverFreeLimit, planFor } from "../lib/entitlement";
+import { applyTierToInboxes, pauseInboxesOverFreeLimit, pauseSharesOverFreeLimit, planFor, resumeShares } from "../lib/entitlement";
 import {
 	badRequest,
 	clientIp,
@@ -116,6 +116,7 @@ licenses.post("/activate", async (c) => {
 	// or the buyer's own link keeps refusing the large files they just paid to
 	// be able to receive.
 	await applyTierToInboxes(c.env, deviceId, PRO);
+	await resumeShares(c.env, deviceId);
 
 	licenseActivated({
 		seats_used: license.activation,
@@ -169,6 +170,7 @@ licenses.post("/deactivate", async (c) => {
 	await c.env.DB.prepare("DELETE FROM license_devices WHERE device_id = ?").bind(target).run();
 	await applyTierToInboxes(c.env, target, FREE);
 	await pauseInboxesOverFreeLimit(c.env, target);
+	await pauseSharesOverFreeLimit(c.env, target);
 
 	const remaining = await c.env.DB.prepare(
 		"SELECT count(*) AS n FROM license_devices WHERE key_hash = ?",

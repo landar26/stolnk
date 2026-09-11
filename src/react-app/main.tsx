@@ -34,13 +34,25 @@ function inboxName(): string | null {
 const Marketing = lazy(() =>
 	import("./landing/Marketing.tsx").then((module) => ({ default: module.Marketing })),
 );
+const SharePage = lazy(() =>
+	import("./share/SharePage.tsx").then((module) => ({ default: module.SharePage })),
+);
 
 function Root() {
 	const path = location.pathname.replace(/^\/+|\/+$/g, "");
 
 	// An unknown or malformed subdomain needs no special case: resolve answers
 	// 404 and the send page already knows how to say so.
-	if (inboxName() !== null) return <SendPage slug={path} />;
+	if (inboxName() !== null) {
+		if (path.startsWith("~")) {
+			return (
+				<Suspense fallback={null}>
+					<SharePage code={path.slice(1).split("/")[0]} />
+				</Suspense>
+			);
+		}
+		return <SendPage slug={path} />;
+	}
 
 	// No fallback: the chunk resolves in a frame or two on a warm cache, and a
 	// spinner that flashes for one frame is worse than nothing appearing yet.

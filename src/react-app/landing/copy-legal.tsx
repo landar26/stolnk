@@ -37,8 +37,8 @@ import { COMPANY_EN, COMPANY_ZH, SUPPORT_EMAIL } from "./contact.ts";
  * guessed at in the prose.
  */
 
-const UPDATED_EN = "6 September 2026";
-const UPDATED_ZH = "2026 年 9 月 6 日";
+const UPDATED_EN = "10 September 2026";
+const UPDATED_ZH = "2026 年 9 月 10 日";
 
 export const legalEn = {
 	privacy: {
@@ -67,7 +67,7 @@ export const legalEn = {
 					that opens it.
 				</p>
 				<p>
-					<strong>One route is different, and we would rather say so here than have you
+					<strong>Two routes are different, and we would rather say so here than have you
 					find out.</strong>{" "}
 					An inbox address also accepts a file posted straight to it from a terminal or a
 					script (<code>curl -F "file=@…"</code>), because nothing outside a browser can run
@@ -77,6 +77,13 @@ export const legalEn = {
 					of that one request the contents are readable by our server. They are held in
 					memory only, never written in that form, and nothing else about the transfer
 					changes. <a href="/how-it-works">How that works, including its limits</a>.
+				</p>
+				<p>
+					Outbound share links are the other exception. The Mac uploads the original
+					filename and bytes so any browser can download them; they are stored in
+					plaintext and are readable by us for the life of the link. The object is
+					deleted when the link expires, is spent or is revoked, and its terminal
+					metadata row is deleted after seven days.
 				</p>
 
 				<h2>What we process, why, and on what basis</h2>
@@ -128,6 +135,11 @@ export const legalEn = {
 									tab closes; our copy goes with the transfer record, and a remembered
 									“always accept” decision is deleted after 30 days
 								</td>
+							</tr>
+							<tr>
+								<th scope="row">Outbound share filename, bytes, digest and controls</th>
+								<td>Publishing the file at the link you create</td>
+								<td>Necessary to provide the service. Plaintext bytes are deleted when the link ends; the terminal metadata row is deleted after seven days</td>
 							</tr>
 							<tr>
 								<th scope="row">Licence key hash, Creem order and customer ids, seats</th>
@@ -589,9 +601,12 @@ export const legalZh: typeof legalEn = {
 					通过网页发出的文件，在发送方的浏览器里就用一把一次性密钥加密，而这把密钥被包装成只有接收端那台 Mac 能解开的形式。文件名也用它加密。到达我们服务器的是密文，我们手里没有任何能打开它的密钥。
 				</p>
 				<p>
-					<strong>有一条路不一样，我们宁可写在这里，也不愿你自己撞见。</strong>{" "}
+					<strong>有两条路不一样，我们宁可写在这里，也不愿你自己撞见。</strong>{" "}
 					收件地址同样接受从终端或脚本直接 POST 上来的文件（<code>curl -F "file=@…"</code>），因为浏览器以外的东西跑不了那套加密。走这条路时，文件是以明文到达我们这里的，再由<em>我们</em>用接收端 Mac 的公钥完成封装。能打开它的钥匙依然只在那台 Mac 手里，最终落地的东西也完全一样——但在那一次请求持续的时间里，内容对我们的服务器是可读的。它只存在于内存中，从不以那种形式写下来，这次传输的其余部分也没有任何不同。
 					<a href="/how-it-works">这套机制是怎么运作的，以及它的局限</a>。
+				</p>
+				<p>
+					出站分享链接是另一个例外。Mac 会上传原始文件名和字节，让任意浏览器都能下载；在链接有效期间，它们以明文存放，我们能够读取。链接过期、次数用完或被撤销时，对象会被删除；终态元数据记录在七天后删除。
 				</p>
 
 				<h2>我们处理什么、为什么、依据是什么</h2>
@@ -630,6 +645,11 @@ export const legalZh: typeof legalEn = {
 								<td>
 									为提供服务所必需。浏览器在关闭标签页时丢弃；我们这一份随传输记录一起处置，「以后一直接收此人」的决定在 30 天后删除
 								</td>
+							</tr>
+							<tr>
+								<th scope="row">出站分享的文件名、字节、摘要与控制项</th>
+								<td>把文件发布到你创建的链接</td>
+								<td>为提供服务所必需。明文字节在链接终止时删除；终态元数据记录在七天后删除</td>
 							</tr>
 							<tr>
 								<th scope="row">授权码哈希、Creem 订单与客户标识、席位数</th>

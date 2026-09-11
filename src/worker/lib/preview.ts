@@ -31,6 +31,10 @@ const DESCRIPTION =
  */
 const IMAGE = "https://stolnk.com/og-send.png";
 const IMAGE_ALT = "Stolnk — your files go to the folder they chose, encrypted in your browser";
+const SHARE_TITLE = "Download a shared file — Stolnk";
+const SHARE_DESCRIPTION = "A file was shared with you through Stolnk. Open the link to see its availability and download it.";
+const SHARE_IMAGE = "https://stolnk.com/og-share.png";
+const SHARE_IMAGE_ALT = "A file shared through Stolnk";
 
 export function isInboxHost(requestUrl: string): boolean {
 	return nameFromHost(requestUrl) !== null;
@@ -51,6 +55,11 @@ export function rewriteInboxPreview(response: Response, requestUrl: string): Res
 	// query string is dropped regardless. It carries `?via=`, which is the
 	// sender's own attribution and has no business in a canonical URL.
 	const canonical = `${url.origin}${url.pathname}`;
+	const isShare = url.pathname.startsWith("/~");
+	const title = isShare ? SHARE_TITLE : TITLE;
+	const description = isShare ? SHARE_DESCRIPTION : DESCRIPTION;
+	const image = isShare ? SHARE_IMAGE : IMAGE;
+	const imageAlt = isShare ? SHARE_IMAGE_ALT : IMAGE_ALT;
 
 	const content = (value: string) => ({
 		element(element: { setAttribute(name: string, value: string): void }) {
@@ -61,17 +70,17 @@ export function rewriteInboxPreview(response: Response, requestUrl: string): Res
 	return new HTMLRewriter()
 		.on("title", {
 			element(element) {
-				element.setInnerContent(TITLE);
+				element.setInnerContent(title);
 			},
 		})
-		.on('meta[name="description"]', content(DESCRIPTION))
-		.on('meta[property="og:title"]', content(TITLE))
-		.on('meta[property="og:description"]', content(DESCRIPTION))
+		.on('meta[name="description"]', content(description))
+		.on('meta[property="og:title"]', content(title))
+		.on('meta[property="og:description"]', content(description))
 		.on('meta[property="og:url"]', content(canonical))
-		.on('meta[property="og:image"]', content(IMAGE))
-		.on('meta[property="og:image:alt"]', content(IMAGE_ALT))
-		.on('meta[name="twitter:title"]', content(TITLE))
-		.on('meta[name="twitter:description"]', content(DESCRIPTION))
-		.on('meta[name="twitter:image"]', content(IMAGE))
+		.on('meta[property="og:image"]', content(image))
+		.on('meta[property="og:image:alt"]', content(imageAlt))
+		.on('meta[name="twitter:title"]', content(title))
+		.on('meta[name="twitter:description"]', content(description))
+		.on('meta[name="twitter:image"]', content(image))
 		.transform(response);
 }

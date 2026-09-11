@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { FREE, PRO_SEATS } from "../limits";
 import { keyHash, signatureValid } from "../lib/creem";
-import { applyTierToInboxes, pauseInboxesOverFreeLimit } from "../lib/entitlement";
+import { applyTierToInboxes, pauseInboxesOverFreeLimit, pauseSharesOverFreeLimit } from "../lib/entitlement";
 import { type AppEnv } from "../lib/http";
 import { licenseRevoked, licenseRevokeUnmatched } from "../lib/metrics";
 
@@ -207,6 +207,7 @@ webhooks.post("/creem", async (c) => {
 		for (const row of results) {
 			await applyTierToInboxes(c.env, row.device_id, FREE);
 			await pauseInboxesOverFreeLimit(c.env, row.device_id);
+			await pauseSharesOverFreeLimit(c.env, row.device_id);
 		}
 
 		licenseRevoked({ reason: kind, devices: results.length });

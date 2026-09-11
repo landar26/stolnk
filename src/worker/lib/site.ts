@@ -54,3 +54,8 @@ export function inboxUrl(name: string, slug: string): string {
 	const { scheme, host } = site();
 	return `${scheme}://${name}.${host}/${slug}`;
 }
+
+export function shareUrl(name: string, code: string): string {
+	const { scheme, host } = site();
+	return `${scheme}://${name}.${host}/~${code}`;
+}

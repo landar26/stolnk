@@ -29,6 +29,9 @@ import {
 	toBase64Url,
 	toHex,
 } from "../src/shared/envelope.ts";
+// No worker types here, only numbers — so the budget the test walks into is the
+// same constant the Worker enforces, rather than a copy that drifts from it.
+import { RATE_MAX_SHARE_LOOKUPS } from "../src/worker/limits.ts";
 
 const BASE = process.env.E2E_BASE ?? "http://localhost:5173";
 const PART_SIZE = 64 * 1024 * 1024;
@@ -321,6 +324,75 @@ async function sendFile(
 		digest,
 		skippedSecond,
 	};
+}
+
+async function makeShare(
+	deviceToken: string,
+	plaintext: Uint8Array,
+	options: { filename?: string; ttl_hours?: number; max_downloads?: number; password?: string; password_salt?: string; code?: string } = {},
+) {
+	const init = await api("/api/v1/shares", {
+		method: "POST",
+		token: deviceToken,
+		body: JSON.stringify({
+			filename: options.filename ?? "shared.txt",
+			size: plaintext.length,
+			ttl_hours: options.ttl_hours ?? 24,
+			max_downloads: options.max_downloads,
+			password: options.password,
+			password_salt: options.password_salt,
+			code: options.code,
+		}),
+	});
+	if (init.status !== 201) return { init };
+	let skipped = false;
+	for (let part = 1; part <= init.body.part_count; part++) {
+		const bytes = plaintext.subarray((part - 1) * init.body.part_size, part * init.body.part_size);
+		const path = `/api/v1/shares/${init.body.share_id}/parts/${part}`;
+		const upload = await api(path, {
+			method: "PUT", token: init.body.token, body: bytes,
+			headers: { "content-type": "application/octet-stream" },
+		});
+		if (upload.status !== 200) return { init, upload };
+		if (part === 1) {
+			const again = await api(path, {
+				method: "PUT", token: init.body.token, body: bytes,
+				headers: { "content-type": "application/octet-stream" },
+			});
+			skipped = again.body?.skipped === true;
+		}
+	}
+	const sha256 = toHex(new Uint8Array(await crypto.subtle.digest("SHA-256", plaintext)));
+	const complete = await api(`/api/v1/shares/${init.body.share_id}/complete`, {
+		method: "POST", token: init.body.token, body: JSON.stringify({ sha256 }),
+	});
+	return { init, complete, skipped };
+}
+
+async function restoreShare(deviceToken: string, shareId: string, plaintext: Uint8Array, claimSha?: string) {
+	const init = await api(`/api/v1/shares/${shareId}/restore`, { method: "POST", token: deviceToken });
+	if (init.status !== 200) return { init };
+	for (let part = 1; part <= init.body.part_count; part++) {
+		const bytes = plaintext.subarray((part - 1) * init.body.part_size, part * init.body.part_size);
+		const upload = await api(`/api/v1/shares/${shareId}/parts/${part}`, {
+			method: "PUT", token: init.body.token, body: bytes,
+			headers: { "content-type": "application/octet-stream" },
+		});
+		if (upload.status !== 200) return { init, upload };
+	}
+	const sha256 = claimSha ?? toHex(new Uint8Array(await crypto.subtle.digest("SHA-256", plaintext)));
+	const complete = await api(`/api/v1/shares/${shareId}/complete`, {
+		method: "POST", token: init.body.token, body: JSON.stringify({ sha256 }),
+	});
+	return { init, complete };
+}
+
+async function shareVerifier(password: string, salt: string, iterations = 210_000): Promise<string> {
+	const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
+	const bits = await crypto.subtle.deriveBits(
+		{ name: "PBKDF2", hash: "SHA-256", salt: fromBase64Url(salt), iterations }, key, 256,
+	);
+	return toHex(new Uint8Array(bits));
 }
 
 /** Reads the local R2 bucket directly, to prove objects really are deleted. */
@@ -629,6 +701,319 @@ check(
 	String(upgradedResolve.body.ttl_hours),
 );
 
+section("Outbound shares — a local file becomes a public link");
+const shareBytes = new TextEncoder().encode("outbound share bytes, exactly");
+const unlimited = await makeShare(token, shareBytes, { filename: "report 你好.txt" });
+check("share creation returns 201", unlimited.init.status === 201, JSON.stringify(unlimited.init.body));
+check("share code has 80 bits of slug entropy", /^[a-z0-9]{16}$/.test(unlimited.init.body.code));
+check("share URL uses the reserved tilde namespace", unlimited.init.body.url === on(NAME, `/~${unlimited.init.body.code}`));
+check("a retried share part is skipped", unlimited.skipped === true);
+check("completing a share makes it ready", unlimited.complete?.status === 200 && unlimited.complete.body.state === "ready");
+
+const sharePath = on(NAME, `/~${unlimited.init.body.code}/${encodeURIComponent("report 你好.txt")}`);
+const shared = await fetch(sharePath);
+check("public download returns the original bytes", shared.status === 200 && new Uint8Array(await shared.arrayBuffer()).every((b, i) => b === shareBytes[i]));
+check("public bytes are always an octet-stream attachment", shared.headers.get("content-type") === "application/octet-stream" && /attachment/.test(shared.headers.get("content-disposition") ?? ""));
+const shareLanding = await fetch(unlimited.init.body.url, { redirect: "manual" });
+check("an unlimited unprotected landing redirects to the byte URL", shareLanding.status === 302);
+const shareCapabilities = await api(`${unlimited.init.body.url}?format=json`);
+check("share capabilities disclose plaintext", shareCapabilities.body.plaintext === true && /not end-to-end encrypted/i.test(shareCapabilities.body.note));
+const masquerade = await api(`/api/v1/resolve?slug=~${unlimited.init.body.code}`);
+check("a share code cannot resolve as an inbox", masquerade.status === 404);
+
+const shareHead = await fetch(sharePath, { method: "HEAD" });
+const shareEtag = shareHead.headers.get("etag") ?? "";
+const shareRange = await fetch(sharePath, { headers: { range: "bytes=0-7" } });
+check("unlimited shares support byte ranges", shareRange.status === 206 && (await shareRange.arrayBuffer()).byteLength === 8);
+const shareSuffix = await fetch(sharePath, { headers: { range: "bytes=-7" } });
+check("unlimited shares support suffix ranges", shareSuffix.status === 206 && (await shareSuffix.arrayBuffer()).byteLength === 7);
+const sharePast = await fetch(sharePath, { headers: { range: "bytes=999999999-" } });
+check("an unsatisfiable share range is 416", sharePast.status === 416 && sharePast.headers.get("content-range") === `bytes */${shareBytes.length}`);
+const share304 = await fetch(sharePath, { headers: { "if-none-match": shareEtag } });
+check("unlimited shares support conditional GET", !!shareEtag && share304.status === 304);
+
+const limited = await makeShare(token, shareBytes, { filename: "limited.bin", max_downloads: 2 });
+const limitedPath = on(NAME, `/~${limited.init.body.code}/limited.bin`);
+for (let i = 0; i < 3; i++) await fetch(limitedPath, { method: "HEAD" });
+const rangedLimited = await fetch(limitedPath, { headers: { range: "bytes=0-3" } });
+check("limited shares ignore Range and return the whole file", rangedLimited.status === 200 && (await rangedLimited.arrayBuffer()).byteLength === shareBytes.length);
+check("limited shares disable caches, ranges and etags", limitedPath && rangedLimited.headers.get("accept-ranges") === "none" && /no-store/.test(rangedLimited.headers.get("cache-control") ?? "") && !rangedLimited.headers.has("etag"));
+const secondLimited = await fetch(limitedPath);
+await secondLimited.arrayBuffer();
+const spentLimited = await fetch(limitedPath);
+check("HEAD does not count and the third GET is gone", secondLimited.status === 200 && spentLimited.status === 410);
+
+const saltReply = await api("/api/v1/shares/salt", { token });
+const sharePasswordVerifier = await shareVerifier("open sesame", saltReply.body.salt, saltReply.body.iterations);
+const protectedShare = await makeShare(token, shareBytes, {
+	filename: "secret.txt", max_downloads: 5, password: sharePasswordVerifier, password_salt: saltReply.body.salt,
+});
+const lookup = await api(on(NAME, `/api/v1/share-link/lookup?code=${protectedShare.init.body.code}`));
+check("locked lookup hides filename and size", lookup.status === 200 && lookup.body.password.required && !("filename" in lookup.body) && !("size" in lookup.body));
+const wrongUnlock = await api(on(NAME, "/api/v1/share-link/unlock"), { method: "POST", body: JSON.stringify({ code: protectedShare.init.body.code, verifier: "wrong" }) });
+check("a wrong share verifier is rejected", wrongUnlock.status === 401);
+const unlock = await api(on(NAME, "/api/v1/share-link/unlock"), { method: "POST", body: JSON.stringify({ code: protectedShare.init.body.code, verifier: sharePasswordVerifier }) });
+const protectedPath = on(NAME, `/~${protectedShare.init.body.code}/secret.txt?t=${encodeURIComponent(unlock.body.token)}`);
+const protectedGet = await fetch(protectedPath);
+check("a short-lived access token downloads the protected file", unlock.status === 200 && protectedGet.status === 200);
+const curlPassword = await fetch(on(NAME, `/~${protectedShare.init.body.code}/secret.txt`), { headers: { "x-stolnk-password": "open sesame" } });
+check("curl can use the explicit plaintext password header", curlPassword.status === 200);
+
+const burn = await makeShare(token, shareBytes, { filename: "once.bin", max_downloads: 1 });
+const burnPath = on(NAME, `/~${burn.init.body.code}/once.bin`);
+const race = await Promise.all([fetch(burnPath), fetch(burnPath)]);
+const raceStatuses = race.map((response) => response.status).sort();
+await Promise.all(race.map((response) => response.arrayBuffer()));
+check("burn-after-read admits exactly one concurrent download", raceStatuses[0] === 200 && raceStatuses[1] === 410, raceStatuses.join(","));
+
+const revokedShare = await makeShare(token, shareBytes, { filename: "revoke.bin" });
+const revoked = await api(`/api/v1/shares/${revokedShare.init.body.share_id}/revoke`, { method: "POST", token });
+const afterRevoke = await fetch(on(NAME, `/~${revokedShare.init.body.code}/revoke.bin`));
+check("revocation immediately deletes access", revoked.status === 200 && afterRevoke.status === 404);
+const badPost = await api(on(NAME, `/~${unlimited.init.body.code}`), { method: "POST", body: new Uint8Array([1]) });
+check("a share POST cannot masquerade as an inbox upload", badPost.status === 404 && !/inbox does not exist/i.test(String(badPost.body?.message)));
+
+section("A share link can carry a path its owner chose");
+const chosen = await makeShare(token, shareBytes, { filename: "invoice.pdf", code: "invoice-2026" });
+check("a chosen path is used verbatim", chosen.init.status === 201 && chosen.init.body.code === "invoice-2026", JSON.stringify(chosen.init.body));
+check("a chosen path builds the public URL", chosen.init.body.url === on(NAME, "/~invoice-2026"));
+// Also the regression test for the router's own charset: `index.ts` used to
+// match `~[a-z0-9]{1,32}`, so a hyphen 404'd before any handler was reached.
+const chosenBytes = await fetch(on(NAME, "/~invoice-2026/invoice.pdf"));
+check("a hyphenated path reaches the bytes", chosenBytes.status === 200 && (await chosenBytes.arrayBuffer()).byteLength === shareBytes.length);
+
+const usedBeforeClash = (await api("/api/v1/licenses/status", { token })).body.relay_used as number;
+const clash = await api("/api/v1/shares", {
+	method: "POST", token,
+	body: JSON.stringify({ filename: "other.pdf", size: shareBytes.length, ttl_hours: 24, code: "invoice-2026" }),
+});
+check("a path already in use is a 409, not a 500", clash.status === 409 && clash.body.error === "code_taken", JSON.stringify(clash.body));
+const usedAfterClash = (await api("/api/v1/licenses/status", { token })).body.relay_used as number;
+// The row and the booking share one batch, so a rejected create leaves neither.
+check("a refused path books no relay bytes", usedAfterClash === usedBeforeClash, `${usedBeforeClash} → ${usedAfterClash}`);
+const clashList = (await api("/api/v1/shares", { token })).body.shares as any[];
+check("a refused path leaves no orphan row", clashList.filter((share) => share.code === "invoice-2026").length === 1);
+
+const uppercase = await makeShare(token, shareBytes, { filename: "case.pdf", code: "  Invoice-2027  " });
+check("a chosen path is trimmed and lower-cased", uppercase.init.body.code === "invoice-2027", JSON.stringify(uppercase.init.body));
+
+for (const [label, code] of [["too short", "ab"], ["two segments", "a/b"], ["an underscore", "a_b"], ["too long", "a".repeat(33)]] as const) {
+	const rejected = await api("/api/v1/shares", {
+		method: "POST", token,
+		body: JSON.stringify({ filename: "bad.pdf", size: 1, ttl_hours: 24, code }),
+	});
+	check(`a path with ${label} is a 400`, rejected.status === 400, `${rejected.status} ${JSON.stringify(rejected.body)}`);
+}
+
+const freeProbe = await api("/api/v1/shares/code-available/never-used-here", { token });
+check("an unused path probes as available", freeProbe.status === 200 && freeProbe.body.available === true && freeProbe.body.reason === null, JSON.stringify(freeProbe.body));
+const takenProbe = await api("/api/v1/shares/code-available/invoice-2026", { token });
+check("a used path probes as taken", takenProbe.status === 200 && takenProbe.body.available === false && takenProbe.body.reason === "taken");
+// The edit screen asks about a path while the share it belongs to already
+// holds it. Without a share to except, the probe answers "taken" about the
+// share doing the asking, and the field calls a successful save a collision.
+const ownProbe = await api(`/api/v1/shares/${chosen.init.body.share_id}/code-available/invoice-2026`, { token });
+check("a share's own path is available to itself", ownProbe.status === 200 && ownProbe.body.available === true, JSON.stringify(ownProbe.body));
+const ownProbeClash = await api(`/api/v1/shares/${chosen.init.body.share_id}/code-available/invoice-2027`, { token });
+check("another link's path is still taken", ownProbeClash.status === 200 && ownProbeClash.body.available === false && ownProbeClash.body.reason === "taken", JSON.stringify(ownProbeClash.body));
+const invalidProbe = await api("/api/v1/shares/code-available/ab", { token });
+// 200, not 400: a field being typed into asked a question and got an answer.
+check("an invalid path probes as invalid, with a 200", invalidProbe.status === 200 && invalidProbe.body.available === false && invalidProbe.body.reason === "invalid", `${invalidProbe.status}`);
+
+const repathed = await api(`/api/v1/shares/${chosen.init.body.share_id}`, {
+	method: "PATCH", token, body: JSON.stringify({ code: "invoice-2026-final" }),
+});
+check("repathing returns the new URL", repathed.status === 200 && repathed.body.url === on(NAME, "/~invoice-2026-final"), JSON.stringify(repathed.body));
+const atNewSharePath = await fetch(on(NAME, "/~invoice-2026-final/invoice.pdf"));
+const atOldSharePath = await fetch(on(NAME, "/~invoice-2026/invoice.pdf"));
+await atNewSharePath.arrayBuffer();
+check("the new path serves the file", atNewSharePath.status === 200);
+check("the old path stops working immediately", atOldSharePath.status === 404);
+const repathClash = await api(`/api/v1/shares/${chosen.init.body.share_id}`, {
+	method: "PATCH", token, body: JSON.stringify({ code: "invoice-2027" }),
+});
+check("repathing onto another live link is a 409", repathClash.status === 409 && repathClash.body.error === "code_taken");
+const repathRevoked = await api(`/api/v1/shares/${revokedShare.init.body.share_id}`, {
+	method: "PATCH", token, body: JSON.stringify({ code: "raised-from-the-dead" }),
+});
+check("a revoked link cannot be repathed", repathRevoked.status === 400, `${repathRevoked.status}`);
+// Guessable paths made enumeration worth attempting, so the two endpoints that
+// answer questions about a path without serving it grew a budget.
+//
+// From its own address, for two reasons: `clientIp` falls back to 0.0.0.0 when
+// nothing sets the header, so every other request in this file shares one
+// bucket and exhausting it here would 429 whatever ran next — and asserting
+// that a different address still gets through is the part worth proving.
+const enumerator = { "cf-connecting-ip": "203.0.113.7" };
+let lookupLimited = 0;
+for (let attempt = 0; attempt < RATE_MAX_SHARE_LOOKUPS + 5; attempt++) {
+	const probe = await api(on(NAME, `/api/v1/share-link/lookup?code=guess-${attempt}`), { headers: enumerator });
+	if (probe.status === 429) lookupLimited += 1;
+}
+check("share metadata lookups are rate limited", lookupLimited > 0, `${lookupLimited} of ${RATE_MAX_SHARE_LOOKUPS + 5} refused`);
+const otherViewer = await api(on(NAME, "/api/v1/share-link/lookup?code=guess-0"), {
+	headers: { "cf-connecting-ip": "198.51.100.4" },
+});
+check("the budget is per address, not global", otherViewer.status !== 429, `${otherViewer.status}`);
+// The landing page shares that bucket and must be reachable from elsewhere too.
+const otherLanding = await fetch(on(NAME, "/~invoice-2026-final"), {
+	headers: { "cf-connecting-ip": "198.51.100.4" }, redirect: "manual",
+});
+check("a landing page is unaffected by another address's enumeration", otherLanding.status === 302, `${otherLanding.status}`);
+
+// The seven-day rule: a terminal row keeps its path so that nobody holding the
+// old link is ever handed a different file at the same address. Revoked first
+// so the attempt below is refused for its path and not for a quota — the code
+// check is the last one `openShare` runs, after every wall.
+await api(`/api/v1/shares/${chosen.init.body.share_id}/revoke`, { method: "POST", token });
+await api(`/api/v1/shares/${uppercase.init.body.share_id}/revoke`, { method: "POST", token });
+const reclaim = await api("/api/v1/shares", {
+	method: "POST", token,
+	body: JSON.stringify({ filename: "squat.pdf", size: 1, ttl_hours: 24, code: "invoice-2027" }),
+});
+check("a revoked link does not release its path", reclaim.status === 409 && reclaim.body.error === "code_taken", `${reclaim.status} ${JSON.stringify(reclaim.body)}`);
+
+const chosenMasquerade = await api("/api/v1/resolve?slug=~invoice-2026-final");
+check("a chosen share path cannot resolve as an inbox", chosenMasquerade.status === 404);
+
+section("Pausing a share is the stop you can undo");
+const pausable = await makeShare(token, shareBytes, { filename: "pausable.pdf", code: "pause-me" });
+const pauseBytes = on(NAME, "/~pause-me/pausable.pdf");
+check("it serves before pausing", (await fetch(pauseBytes)).status === 200);
+const paused = await api(`/api/v1/shares/${pausable.init.body.share_id}`, {
+	method: "PATCH", token, body: JSON.stringify({ paused: true }),
+});
+check("pausing reports the share as paused", paused.status === 200 && paused.body.paused === true, JSON.stringify(paused.body));
+const whilePausedShare = await fetch(pauseBytes);
+await whilePausedShare.arrayBuffer();
+// 423, not 404: the link is real and its holder should try again, which is the
+// whole difference between this and every other way a link stops working.
+check("a paused link says temporarily unavailable, not gone", whilePausedShare.status === 423, `${whilePausedShare.status}`);
+const pausedLookup = await api(on(NAME, "/api/v1/share-link/lookup?code=pause-me"));
+check("a paused link discloses nothing through lookup", pausedLookup.status === 404);
+check("its bytes are still there", await r2ObjectExists(`share/${pausable.init.body.share_id}`));
+const pausedClash = await api("/api/v1/shares", {
+	method: "POST", token,
+	body: JSON.stringify({ filename: "squat.pdf", size: 1, ttl_hours: 24, code: "pause-me" }),
+});
+check("and it still holds its path", pausedClash.status === 409 && pausedClash.body.error === "code_taken");
+// The point of the feature: a paused link is stopped, not finished, so the
+// controls that could get it out of a pause must still work.
+const pausedRepath = await api(`/api/v1/shares/${pausable.init.body.share_id}`, {
+	method: "PATCH", token, body: JSON.stringify({ code: "pause-me-renamed" }),
+});
+check("a paused link can still be repathed", pausedRepath.status === 200 && pausedRepath.body.code === "pause-me-renamed", JSON.stringify(pausedRepath.body));
+const resumed = await api(`/api/v1/shares/${pausable.init.body.share_id}`, {
+	method: "PATCH", token, body: JSON.stringify({ paused: false }),
+});
+check("resuming reports it live again", resumed.status === 200 && resumed.body.paused === false);
+const afterResume = await fetch(on(NAME, "/~pause-me-renamed/pausable.pdf"));
+check("and the bytes come back", afterResume.status === 200 && (await afterResume.arrayBuffer()).byteLength === shareBytes.length);
+const badPause = await api(`/api/v1/shares/${pausable.init.body.share_id}`, {
+	method: "PATCH", token, body: JSON.stringify({ paused: "yes" }),
+});
+check('"paused" must be a boolean', badPause.status === 400);
+// Nothing to turn back on: revoking deleted the object.
+const resumeRevoked = await api(`/api/v1/shares/${revokedShare.init.body.share_id}`, {
+	method: "PATCH", token, body: JSON.stringify({ paused: false }),
+});
+check("a revoked link cannot be resumed", resumeRevoked.status === 400, `${resumeRevoked.status}`);
+// Hands back the active-share slot. Free allows three, and a section that keeps
+// one alive spends part of the next section's budget rather than its own.
+await api(`/api/v1/shares/${pausable.init.body.share_id}`, { method: "DELETE", token });
+
+section("A link that ended can be restored, with the same file");
+const restorable = await makeShare(token, shareBytes, { filename: "restore-me.pdf", code: "restore-me" });
+const restorePath = on(NAME, "/~restore-me/restore-me.pdf");
+await api(`/api/v1/shares/${restorable.init.body.share_id}/revoke`, { method: "POST", token });
+check("it is gone after revoking", (await fetch(restorePath)).status === 404);
+check("and its bytes are gone with it", !(await r2ObjectExists(`share/${restorable.init.body.share_id}`)));
+
+// The gate the whole feature rests on: the URL comes back unchanged, so the
+// bytes behind it have to be the ones it was created with.
+//
+// A file of a different length never gets that far — the row's size is fixed,
+// so the part upload refuses it before a byte is stored. Same length, different
+// content is the case only the hash can catch, and it is the one below.
+const shorterFile = await restoreShare(token, restorable.init.body.share_id, new TextEncoder().encode("short"));
+check("a file of the wrong size is refused before it is stored", shorterFile.upload?.status === 400, JSON.stringify(shorterFile.upload?.body));
+await api(`/api/v1/shares/${restorable.init.body.share_id}/abort`, { method: "POST", token: shorterFile.init.body.token });
+const wrongBytes = new TextEncoder().encode("outbound share bytes, EXACTLY");
+const wrongFile = await restoreShare(token, restorable.init.body.share_id, wrongBytes);
+check("restoring hands back an upload slot", wrongFile.init.status === 200 && typeof wrongFile.init.body.token === "string", JSON.stringify(wrongFile.init.body));
+check("a different file is refused at completion", wrongFile.complete?.status === 400 && /same file/i.test(String(wrongFile.complete.body?.message)), JSON.stringify(wrongFile.complete?.body));
+const afterWrong = await api(`/api/v1/shares/${restorable.init.body.share_id}`, { token });
+check("the refused restore leaves the record terminal, not half-open", afterWrong.status === 200 && afterWrong.body.state !== "uploading", JSON.stringify(afterWrong.body));
+check("and the link is still not serving", (await fetch(restorePath)).status === 404);
+// A lied-about hash is the same refusal: the check is on what the row carries.
+const liar = await restoreShare(token, restorable.init.body.share_id, wrongBytes, "0".repeat(64));
+check("a claimed hash that is not the record's is refused too", liar.complete?.status === 400, JSON.stringify(liar.complete?.body));
+
+const restored = await restoreShare(token, restorable.init.body.share_id, shareBytes);
+check("the right file completes", restored.complete?.status === 200 && restored.complete.body.state === "ready", JSON.stringify(restored.complete?.body));
+const servedAgain = await fetch(restorePath);
+check("and the original URL serves the original bytes", servedAgain.status === 200 && new Uint8Array(await servedAgain.arrayBuffer()).every((b, i) => b === shareBytes[i]));
+check("the restored link kept its path", restored.init.body.code === "restore-me" && restored.init.body.url === on(NAME, "/~restore-me"));
+// This row has now been restored four times. Its window must still be the
+// 24 hours it was made with: renewing `expires_at` without `created_at` would
+// have grown the span each time until it failed Free's own 24-hour wall.
+const restoredRow = ((await api("/api/v1/shares", { token })).body.shares as any[])
+	.find((share) => share.share_id === restorable.init.body.share_id);
+const restoredSpan = (restoredRow.expires_at - restoredRow.created_at) / 3_600_000;
+check("restoring does not stretch the link's lifetime", Math.abs(restoredSpan - 24) < 0.01, `${restoredSpan}h`);
+
+// Restoring a spent burn-after-read has to re-arm it, or it is spent on arrival.
+const burned = await makeShare(token, shareBytes, { filename: "burned.pdf", code: "burn-restore", max_downloads: 1 });
+const burnedPath = on(NAME, "/~burn-restore/burned.pdf");
+await (await fetch(burnedPath)).arrayBuffer();
+check("the burn link is spent after one download", (await fetch(burnedPath)).status === 410);
+const reburn = await restoreShare(token, burned.init.body.share_id, shareBytes);
+check("a spent link restores", reburn.complete?.status === 200, JSON.stringify(reburn.complete?.body));
+const reburned = await fetch(burnedPath);
+await reburned.arrayBuffer();
+check("and its download count was re-armed, not resumed", reburned.status === 200, `${reburned.status}`);
+check("still burning after one", (await fetch(burnedPath)).status === 410);
+
+const liveRestore = await api(`/api/v1/shares/${unlimited.init.body.share_id}/restore`, { method: "POST", token });
+check("a link that has not ended cannot be restored", liveRestore.status === 400, `${liveRestore.status}`);
+
+await api(`/api/v1/shares/${restorable.init.body.share_id}`, { method: "DELETE", token });
+await api(`/api/v1/shares/${burned.init.body.share_id}`, { method: "DELETE", token });
+
+section("Deleting a share frees its path (the other half of revoke)");
+// Revoked a moment ago and still holding "invoice-2027" — the assertion above
+// is what makes this section mean something.
+const deleted = await api(`/api/v1/shares/${uppercase.init.body.share_id}`, { method: "DELETE", token });
+check("deleting a share reports a deletion, not a revocation", deleted.status === 200 && deleted.body.deleted === true, JSON.stringify(deleted.body));
+const afterDelete = await api(`/api/v1/shares/${uppercase.init.body.share_id}`, { token });
+check("the record is gone, not merely terminal", afterDelete.status === 404);
+const listAfterDelete = (await api("/api/v1/shares", { token })).body.shares as any[];
+check("and it leaves the owner's list", !listAfterDelete.some((share) => share.share_id === uppercase.init.body.share_id));
+const reused = await makeShare(token, shareBytes, { filename: "reused.pdf", code: "invoice-2027" });
+check("the freed path can be taken by a new link", reused.init.status === 201 && reused.init.body.code === "invoice-2027", JSON.stringify(reused.init.body));
+const reusedBytes = await fetch(on(NAME, "/~invoice-2027/reused.pdf"));
+await reusedBytes.arrayBuffer();
+check("and the new link serves its own file", reusedBytes.status === 200);
+
+// Deleting a *live* share has to end the object too: once the row is gone
+// nothing left in the system knows there is plaintext at that key.
+const liveDelete = await makeShare(token, shareBytes, { filename: "still-live.pdf", code: "delete-me-live" });
+check("a share to delete while live was created", liveDelete.init.status === 201, JSON.stringify(liveDelete.init.body));
+const liveKey = `share/${liveDelete.init.body.share_id}`;
+check("the live share's object exists before deletion", await r2ObjectExists(liveKey), liveKey);
+const liveDeleted = await api(`/api/v1/shares/${liveDelete.init.body.share_id}`, { method: "DELETE", token });
+check("a live share can be deleted in one step", liveDeleted.status === 200 && liveDeleted.body.deleted === true);
+const afterLiveDelete = await fetch(on(NAME, "/~delete-me-live/still-live.pdf"));
+check("its link stops working", afterLiveDelete.status === 404);
+let liveObjectGone = false;
+for (let attempt = 0; attempt < 20 && !liveObjectGone; attempt++) {
+	liveObjectGone = !(await r2ObjectExists(liveKey));
+}
+check("and its bytes are released, not orphaned", liveObjectGone);
+
+const foreign = await api(`/api/v1/shares/${uppercase.init.body.share_id}`, { method: "DELETE", token });
+check("deleting an already-deleted share is a 404, not a 500", foreign.status === 404, `${foreign.status}`);
+
 section("Relay accounting (PRD 16.1 — booked on accept, returned if undelivered)");
 const usedBefore = (await api("/api/v1/licenses/status", { token })).body.relay_used as number;
 const bookSize = 100 * 1024 * 1024;
@@ -901,7 +1286,8 @@ check("and so is completing it over the relay", lanComplete.status === 400, Stri
 // PRD 16.2 — the local path stays open when the paid one has run out. This is
 // the whole reason the transport claim skips the allowance check rather than
 // merely skipping the booking.
-const overBudget = 20 * 1024 * 1024 * 1024;
+// One byte above the per-file ceiling. Exactly 20 GiB is valid on Pro.
+const overBudget = 20 * 1024 * 1024 * 1024 + 1;
 const relayOverBudget = await api("/api/v1/transfers", {
 	method: "POST",
 	body: JSON.stringify({
@@ -920,8 +1306,8 @@ const relayOverBudget = await api("/api/v1/transfers", {
 	}),
 });
 check(
-	"a transfer past the monthly allowance is still refused over the relay",
-	relayOverBudget.status === 402 || relayOverBudget.status === 413,
+	"a transfer past the file ceiling is still refused over the relay",
+	relayOverBudget.status === 400 || relayOverBudget.status === 402 || relayOverBudget.status === 413,
 	String(relayOverBudget.status),
 );
 

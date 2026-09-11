@@ -176,7 +176,7 @@ export const pagesEn = {
 					browser.
 				</p>
 
-				<h2>One route that is not browser-encrypted at all</h2>
+				<h2>Two routes that are not browser-encrypted</h2>
 				<p>
 					An inbox address is also usable from a terminal —{" "}
 					<code>curl -F &quot;file=@photo.jpg&quot; ryan.stolnk.com/client-a</code> — because
@@ -187,6 +187,12 @@ export const pagesEn = {
 					</strong>{" "}
 					Your Mac cannot tell the two apart and does not need to: what it receives, and what
 					it alone can open, is identical either way.
+				</p>
+				<p>
+					A file shared outward from the Mac is the other deliberate exception. It is
+					stored in plaintext so any browser can download it; Stolnk can read it until
+					the link expires, is spent or is revoked. The creation and download screens
+					state this at the point it matters.
 				</p>
 				<p>
 					What differs is one request&rsquo;s worth of exposure. The bytes exist in our
@@ -443,13 +449,16 @@ export const pagesZh: typeof pagesEn = {
 					这些都没有把局限变成保证，只是把它收窄了。如果某个文件绝对不能被除你之外的任何人读到，那它应该在进入任何浏览器之前就已经加密。
 				</p>
 
-				<h2>还有一条路，根本不在浏览器里加密</h2>
+				<h2>还有两条路不走浏览器端加密</h2>
 				<p>
 					收件地址同时也能在终端里用——
 					<code>curl -F &quot;file=@photo.jpg&quot; ryan.stolnk.com/client-a</code>
 					——因为脚本、构建任务和 AI agent 跑不了浏览器跑的那套加密。
 					<strong>走这条路时，文件是以明文到达我们服务器的，再由我们的服务器用你 Mac 的公钥封装。</strong>{" "}
 					你的 Mac 分辨不出这两者，也不需要分辨：它收到的、并且只有它能打开的那份东西，两条路完全一样。
+				</p>
+				<p>
+					从 Mac 向外分享文件是另一个刻意的例外。为了让任意浏览器都能下载，文件以明文存放；在链接过期、次数用完或被撤销之前，Stolnk 能够读取它。创建页和下载页都会在真正相关的位置写明这一点。
 				</p>
 				<p>
 					不一样的是一次请求那么长的暴露窗口。字节以明文形式存在于我们服务器的内存里，直到加密完成为止，并且从不以那种形式写到任何地方。这跟上面一段是实打实的区别，不是它的脚注——所以写在这里，而不是留给人自己发现。如果某个文件在意这一点，那个文件就走页面发。

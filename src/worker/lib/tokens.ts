@@ -40,7 +40,19 @@ export interface SignalToken {
 	exp: number;
 }
 
-export type TokenPayload = DeviceToken | UploadToken | SignalToken;
+export interface ShareUploadToken {
+	t: "share_upload";
+	share: string;
+	exp: number;
+}
+
+export interface ShareAccessToken {
+	t: "share_access";
+	share: string;
+	exp: number;
+}
+
+export type TokenPayload = DeviceToken | UploadToken | SignalToken | ShareUploadToken | ShareAccessToken;
 
 const encoder = new TextEncoder();
 const keyCache = new Map<string, Promise<CryptoKey>>();

@@ -193,6 +193,34 @@ export async function abortTransfer(transferId: string, token: string): Promise<
 	);
 }
 
+export interface ShareInfo {
+	code?: string;
+	filename?: string;
+	size?: number;
+	expires_at?: number;
+	downloads_left?: number | null;
+	token?: string;
+	password: { required: boolean; salt?: string | null; iterations?: number };
+}
+
+export async function lookupShare(code: string): Promise<ShareInfo> {
+	return parse<ShareInfo>(
+		await fetch(`/api/v1/share-link/lookup?code=${encodeURIComponent(code)}`, {
+			headers: { accept: "application/json" },
+		}),
+	);
+}
+
+export async function unlockShare(code: string, verifier: string): Promise<ShareInfo> {
+	return parse<ShareInfo>(
+		await fetch("/api/v1/share-link/unlock", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ code, verifier }),
+		}),
+	);
+}
+
 /** Live delivery status, so the page can say "Delivered" rather than "Uploaded". */
 export function watchTransfer(
 	token: string,

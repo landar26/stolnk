@@ -163,3 +163,25 @@ export async function pauseInboxesOverFreeLimit(env: Env, deviceId: string): Pro
 		.bind(deviceId, deviceId, FREE.maxInboxes)
 		.run();
 }
+
+/** Pause excess outbound links on downgrade; never destroy their files. */
+export async function pauseSharesOverFreeLimit(env: Env, deviceId: string): Promise<void> {
+	await env.DB.prepare(
+		`UPDATE shares SET paused = 1
+		 WHERE owner_device_id = ? AND state IN ('uploading', 'ready') AND share_id NOT IN (
+		   SELECT share_id FROM shares WHERE owner_device_id = ? AND state IN ('uploading', 'ready')
+		   ORDER BY created_at ASC LIMIT ?
+		 )`,
+	)
+		.bind(deviceId, deviceId, FREE.maxActiveShares)
+		.run();
+}
+
+/** A renewed Pro entitlement restores every paused outbound link in place. */
+export async function resumeShares(env: Env, deviceId: string): Promise<void> {
+	await env.DB.prepare(
+		"UPDATE shares SET paused = 0 WHERE owner_device_id = ? AND state IN ('uploading', 'ready')",
+	)
+		.bind(deviceId)
+		.run();
+}

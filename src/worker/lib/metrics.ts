@@ -95,7 +95,9 @@ export function transferExpired(fields: { inbox_id: string; bytes: number }): vo
  * inbox in particular is the primary evidence for H2 (PRD 2.1): a refusal
  * recorded here is a user who wanted a second folder, whether or not they paid.
  */
-export function upgradeWallHit(fields: { wall: "second_inbox" | "password" }): void {
+export function upgradeWallHit(fields: {
+	wall: "second_inbox" | "password" | "share_ttl" | "share_password" | "active_shares";
+}): void {
 	emit("upgrade.wall", fields);
 }
 
