@@ -34,6 +34,13 @@ import { present } from "./inboxes";
  * PRD 7.1: registration is one screen and one round trip. The name is not a
  * later upgrade over a random identity — it *is* the identity, so it is part of
  * the request that creates the device.
+ *
+ * The *address* is a second round trip, and only on the Mac is it this one. The
+ * Mac asks for a path here and ends onboarding on a working URL; iOS asks for
+ * none, because there the folder comes first — the path is the name given to a
+ * folder, so there is nothing to say until the user has picked one. A device
+ * with no inboxes is an ordinary state, not a half-built one: deleting your
+ * last address has always produced it.
  */
 export const devices = new Hono<AppEnv>();
 
@@ -48,18 +55,16 @@ interface RegisterBody {
 devices.post("/", async (c) => {
 	const body = await readJson<RegisterBody>(c);
 	const name = validateName(requireString(body.name, "name", 32));
-	// Every link is a name *and* a path, so the first inbox needs one too — there
-	// is no bare-subdomain address to fall back on.
-	const slug = requireSlug(body.slug);
+	/*
+	 * An inbox is optional here; a *path* is not, once one is offered. Absent
+	 * means "no address yet" and creates nothing. An empty or blank string is
+	 * still a 400, as it is everywhere else: there is no bare-subdomain address
+	 * for it to mean, so a client that sent one meant to send a path and has a
+	 * bug — quietly registering it with no inbox would hide that.
+	 */
+	const slug = body.slug === undefined || body.slug === null ? null : requireSlug(body.slug);
 	const pubkeySig = requireString(body.pubkey_sig, "pubkey_sig", 256);
 	const pubkeyKex = requireString(body.pubkey_kex, "pubkey_kex", 256);
-	// The first inbox is the device's own, so the name is the honest default —
-	// the send page reads "Send files to ryan" rather than "Send files to Inbox".
-	// Later inboxes take their folder's name instead, which carries more.
-	const displayName =
-		typeof body.display_name === "string" && body.display_name.trim()
-			? body.display_name.trim().slice(0, MAX_DISPLAY_NAME)
-			: name;
 
 	// Both keys are raw uncompressed P-256 points: 0x04 || X(32) || Y(32).
 	for (const [field, key] of [["pubkey_sig", pubkeySig], ["pubkey_kex", pubkeyKex]] as const) {
@@ -82,18 +87,32 @@ devices.post("/", async (c) => {
 	const deviceId = randomId();
 	const now = Date.now();
 
-	// Registration hands back a working URL in one round trip, so the first inbox
-	// is created here rather than in a follow-up call. It is an ordinary inbox —
-	// deletable and movable like the rest.
+	const statements = [
+		c.env.DB.prepare(
+			`INSERT INTO devices (device_id, name, pubkey_sig, pubkey_kex, created_at, last_seen)
+			 VALUES (?, ?, ?, ?, ?, ?)`,
+		).bind(deviceId, name, pubkeySig, pubkeyKex, now, now),
+	];
+
+	// A path asked for here gets its inbox here rather than in a follow-up call,
+	// so that registration can hand back a working URL in one round trip. It is an
+	// ordinary inbox — deletable and movable like the rest.
 	// FREE, unconditionally: a licence attaches to a device that already exists,
 	// so a device cannot be on Pro at the instant it is created. Activating one
 	// later raises this inbox's ceiling (`applyTierToInboxes`).
-	const { row: inbox, stmt: insertInbox } = inboxInsert(c.env, {
-		deviceId,
-		slug,
-		displayName,
-		tier: FREE,
-	});
+	let inbox: InboxRow | null = null;
+	if (slug !== null) {
+		// This inbox is the device's own, so the name is the honest default — the
+		// send page reads "Send files to ryan" rather than "Send files to Inbox".
+		// Inboxes made later take their folder's name instead, which carries more.
+		const displayName =
+			typeof body.display_name === "string" && body.display_name.trim()
+				? body.display_name.trim().slice(0, MAX_DISPLAY_NAME)
+				: name;
+		const built = inboxInsert(c.env, { deviceId, slug, displayName, tier: FREE });
+		inbox = built.row;
+		statements.push(built.stmt);
+	}
 
 	// Signed before anything is written. It touches neither the database nor the
 	// network, but it does read SESSION_SECRET — and when that is unset it throws.
@@ -104,15 +123,12 @@ devices.post("/", async (c) => {
 	const session = await issueDeviceToken(c.env, deviceId);
 
 	try {
-		// One batch, so a device can never exist without the inbox that gives it a
-		// URL — and so the UNIQUE(name) that loses a race takes the inbox with it.
-		await c.env.DB.batch([
-			c.env.DB.prepare(
-				`INSERT INTO devices (device_id, name, pubkey_sig, pubkey_kex, created_at, last_seen)
-				 VALUES (?, ?, ?, ?, ?, ?)`,
-			).bind(deviceId, name, pubkeySig, pubkeyKex, now, now),
-			insertInbox,
-		]);
+		// One batch, so a device can never exist without the inbox that was asked for
+		// alongside it — and so the UNIQUE(name) that loses a race takes that inbox
+		// with it rather than stranding it under a name someone else now holds. With
+		// no path there is a single statement and nothing to keep in step; the catch
+		// below turns the constraint into a 409 either way.
+		await c.env.DB.batch(statements);
 	} catch (error) {
 		if (String(error).includes("UNIQUE")) {
 			return fail(409, "name_taken", "That name is already in use.");
@@ -126,12 +142,18 @@ devices.post("/", async (c) => {
 			name,
 			token: session.token,
 			expires_at: session.expires_at,
-			inbox: {
-				inbox_id: inbox.inbox_id,
-				slug: inbox.path_slug,
-				url: inboxUrl(name, inbox.path_slug),
-				display_name: inbox.display_name,
-			},
+			// Omitted rather than null when no path was asked for: a key that is not
+			// there cannot be read as "an inbox that is null".
+			...(inbox
+				? {
+						inbox: {
+							inbox_id: inbox.inbox_id,
+							slug: inbox.path_slug,
+							url: inboxUrl(name, inbox.path_slug),
+							display_name: inbox.display_name,
+						},
+					}
+				: {}),
 		},
 		201,
 	);

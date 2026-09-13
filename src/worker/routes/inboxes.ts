@@ -189,7 +189,8 @@ inboxes.post("/:id/password-salt", async (c) => {
 });
 
 /**
- * Any inbox, including the one registration created — it has no special status.
+ * Any inbox, including one registration created alongside the device — it has
+ * no special status.
  * Deleting one frees its path for reuse and cascades to its transfers and files,
  * so anything still parked in the relay for it goes too — which is why the Mac
  * confirms first.

@@ -35,6 +35,14 @@ export interface PlanState {
 	tier: "free" | "pro";
 	relay_used: number;
 	relay_limit: number;
+	/**
+	 * How many outbound links this tier allows, for the same reason
+	 * `relay_limit` is here: the Mac greys out "Share a File…" at the ceiling and
+	 * must not hold its own copy of a number that can move. The server stays the
+	 * authority — this is what the client is allowed to *say*, not what it is
+	 * allowed to decide.
+	 */
+	share_limit: number;
 	/** Present only on Pro. `seats` mirrors the activation limit set in Creem. */
 	license?: { seats: number; seats_used: number; status: string };
 }
@@ -69,7 +77,14 @@ export async function planFor(env: Env, deviceId: string): Promise<PlanState> {
 	const tier = row?.status === "active" ? PRO : FREE;
 	const used = await relayUsed(env, deviceId);
 
-	if (!row) return { tier: tier.name, relay_used: used, relay_limit: tier.monthlyRelayBytes };
+	if (!row) {
+		return {
+			tier: tier.name,
+			relay_used: used,
+			relay_limit: tier.monthlyRelayBytes,
+			share_limit: tier.maxShares,
+		};
+	}
 
 	const seats = await env.DB.prepare(
 		"SELECT count(*) AS n FROM license_devices WHERE key_hash = ?",
@@ -81,6 +96,7 @@ export async function planFor(env: Env, deviceId: string): Promise<PlanState> {
 		tier: tier.name,
 		relay_used: used,
 		relay_limit: tier.monthlyRelayBytes,
+		share_limit: tier.maxShares,
 		license: {
 			seats: row.seats || PRO_SEATS,
 			seats_used: seats?.n ?? 0,
@@ -149,8 +165,8 @@ export async function applyTierToInboxes(env: Env, deviceId: string, tier: Tier)
  * buying again restores them exactly as they were. Deleting them would make a
  * refund destructive and a mis-fired webhook catastrophic.
  *
- * The oldest inbox survives, on the assumption that it is the one from
- * onboarding and the one whose link is furthest into circulation.
+ * The oldest inbox survives, as the one whose link has been in circulation
+ * longest and so is the most expensive to cut off.
  */
 export async function pauseInboxesOverFreeLimit(env: Env, deviceId: string): Promise<void> {
 	await env.DB.prepare(
@@ -164,7 +180,17 @@ export async function pauseInboxesOverFreeLimit(env: Env, deviceId: string): Pro
 		.run();
 }
 
-/** Pause excess outbound links on downgrade; never destroy their files. */
+/**
+ * Pause excess outbound links on downgrade; never destroy their files.
+ *
+ * Deliberately asymmetric with the admission wall in `lib/share.ts`, which
+ * counts every record a device holds. This one only orders and pauses links that
+ * are actually serving, because pausing a revoked or expired record achieves
+ * nothing — there is no link left to stop. So a downgraded device is left with
+ * one link still answering, plus however many terminal records it had, and has
+ * to delete one before it can make another. That is the rule working, not a gap
+ * in it: the docstring above still holds, and downgrading destroys nothing.
+ */
 export async function pauseSharesOverFreeLimit(env: Env, deviceId: string): Promise<void> {
 	await env.DB.prepare(
 		`UPDATE shares SET paused = 1
@@ -173,7 +199,7 @@ export async function pauseSharesOverFreeLimit(env: Env, deviceId: string): Prom
 		   ORDER BY created_at ASC LIMIT ?
 		 )`,
 	)
-		.bind(deviceId, deviceId, FREE.maxActiveShares)
+		.bind(deviceId, deviceId, FREE.maxShares)
 		.run();
 }
 

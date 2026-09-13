@@ -143,8 +143,9 @@ export interface NewInbox {
 
 /**
  * Builds the row and the statement that writes it, without running either.
- * Registration needs the insert inside a batch with the device it belongs to,
- * so that a device can never exist without its root inbox.
+ * Registration needs the insert inside a batch with the device it belongs to:
+ * when a path is asked for at registration, the device and that inbox have to
+ * land together or not at all.
  */
 export function inboxInsert(
 	env: Env,

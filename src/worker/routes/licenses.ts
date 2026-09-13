@@ -112,9 +112,10 @@ licenses.post("/activate", async (c) => {
 		).bind(deviceId, hash, instanceId, now),
 	]);
 
-	// The inbox created at registration carries the free 2 GB ceiling. Raise it,
+	// Every inbox this device already has carries the free 2 GB ceiling. Raise it,
 	// or the buyer's own link keeps refusing the large files they just paid to
-	// be able to receive.
+	// be able to receive. A device with none yet is not a special case — the
+	// update matches nothing, and the inbox it makes next reads the live tier.
 	await applyTierToInboxes(c.env, deviceId, PRO);
 	await resumeShares(c.env, deviceId);
 

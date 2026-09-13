@@ -126,8 +126,12 @@ export function presentShare(name: string, row: ShareRow) {
  * that was Pro when it made a 30-day link and is Free now does not get to bring
  * that link back by the side door.
  *
- * Terminal rows are invisible to the counting queries (`state IN ('uploading',
- * 'ready')`), so a row being restored never has to be excluded from its own sums.
+ * The link count is the one wall a restore has to be excused from. It counts
+ * records rather than serving links (`Tier.maxShares`), so the row being
+ * restored is inside its own sum — and a Free device, whose allowance is one,
+ * could never bring anything back. `exceptShareId` takes it out. The storage and
+ * relay sums need no such excuse: they still filter on `state IN ('uploading',
+ * 'ready')`, and a terminal row has no bytes left in R2 to count.
  */
 async function admitShare(
 	env: Env,
@@ -137,6 +141,8 @@ async function admitShare(
 		ttlHours: number;
 		hasPassword: boolean;
 		now: number;
+		/** The row being restored, which must not be counted against itself. */
+		exceptShareId?: string;
 	},
 ): Promise<void> {
 	const tier = await tierFor(env, options.ownerDeviceId);
@@ -153,18 +159,29 @@ async function admitShare(
 		upgradeRequired("Password-protected share links are part of Pro.");
 	}
 
-	const active = await env.DB.prepare(
-		"SELECT count(*) AS n FROM shares WHERE owner_device_id = ? AND state IN ('uploading', 'ready') AND expires_at > ?",
+	// Every record the device still has, whatever state it is in — see
+	// `Tier.maxShares`. A revoked link is still holding its path, so it is still
+	// holding its slot; deleting it is what hands both back.
+	const held = await env.DB.prepare(
+		"SELECT count(*) AS n FROM shares WHERE owner_device_id = ? AND share_id IS NOT ?",
 	)
-		.bind(options.ownerDeviceId, now)
+		.bind(options.ownerDeviceId, options.exceptShareId ?? null)
 		.first<{ n: number }>();
-	if ((active?.n ?? 0) >= tier.maxActiveShares) {
-		upgradeWallHit({ wall: "active_shares" });
-		upgradeRequired(`Your plan includes ${tier.maxActiveShares} active share links.`);
+	if ((held?.n ?? 0) >= tier.maxShares) {
+		upgradeWallHit({ wall: "share_limit" });
+		// The second half is not padding. "Revoked, and still refused" is the one
+		// thing about this wall that reads like a bug, so the refusal says why.
+		upgradeRequired(
+			tier.maxShares === 1
+				? "Free includes one share link. Delete the one you have to make another — revoking keeps its address, and with it its slot."
+				: `Your plan includes ${tier.maxShares} share links. Delete one to make another.`,
+		);
 	}
 
 	// Kept separate from pending inbox bytes: sharing must not silently consume
 	// the capacity needed for incoming files, and the refusal has different words.
+	// Unlike the count above this one is over serving links only: a terminal row
+	// released its R2 object when it ended and has no bytes left to charge for.
 	const stored = await env.DB.prepare(
 		"SELECT ifnull(sum(size), 0) AS bytes FROM shares WHERE owner_device_id = ? AND state IN ('uploading', 'ready') AND expires_at > ?",
 	)
@@ -335,6 +352,7 @@ export async function reopenShare(env: Env, row: ShareRow) {
 		ttlHours: span / 3_600_000,
 		hasPassword: !!row.password_verifier_hash,
 		now,
+		exceptShareId: row.share_id,
 	});
 	const expiresAt = now + span;
 	// Signed before the first durable write, as in `openShare`.

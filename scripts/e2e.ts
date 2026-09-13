@@ -413,12 +413,14 @@ console.log(`Stolnk e2e against ${BASE}`);
 
 section("Device onboarding (PRD 7.1 — one input: the name)");
 const device = await makeDevice();
-const register = (name: string, keys = device, slug = "inbox") =>
+// `slug: null` is the iOS shape — a name and nothing else. The default is the
+// Mac's, so every existing call site below still registers with an address.
+const register = (name: string, keys = device, slug: string | null = "inbox") =>
 	api("/api/v1/devices", {
 		method: "POST",
 		body: JSON.stringify({
 			name,
-			slug,
+			...(slug === null ? {} : { slug }),
 			pubkey_sig: keys.pubkey_sig,
 			pubkey_kex: keys.pubkey_kex,
 		}),
@@ -533,6 +535,93 @@ check(
 	freePlan.body.relay_limit === 3 * 1024 ** 3 && freePlan.body.relay_used === 0,
 	JSON.stringify(freePlan.body),
 );
+check(
+	"and the outbound link ceiling it is held to",
+	freePlan.body.share_limit === 1,
+	JSON.stringify(freePlan.body),
+);
+
+/*
+ * Free's outbound link walls, none of which had a test before now: the whole of
+ * the shares suite below runs on a device that has already activated Pro.
+ *
+ * The rule under test is that a *record* holds the slot, not a link that is
+ * serving — so the interesting assertions are the two negative ones. Revoking
+ * does not hand the slot back (the path is still reserved, so it is still
+ * taken), and restoring is the single thing excused from the count, because a
+ * row that counted itself could never come back on an allowance of one.
+ */
+const freeBytes = new TextEncoder().encode("one free link");
+const onlyLink = await makeShare(token, freeBytes, { filename: "only.txt", code: "only-one" });
+check(
+	"Free may create one outbound link",
+	onlyLink.init.status === 201 && onlyLink.complete?.status === 200,
+	JSON.stringify(onlyLink.init.body),
+);
+
+const secondLink = await makeShare(token, freeBytes, { filename: "second.txt" });
+check(
+	"a second link is refused as an upgrade, not as a quota",
+	secondLink.init.status === 402 && secondLink.init.body.error === "upgrade_required",
+	`${secondLink.init.status} ${JSON.stringify(secondLink.init.body)}`,
+);
+check(
+	"and the refusal names the ceiling that applies",
+	/one share link/.test(String(secondLink.init.body.message)),
+	String(secondLink.init.body.message),
+);
+
+const freeTtl = await makeShare(token, freeBytes, { filename: "week.txt", ttl_hours: 168 });
+check(
+	"Free is refused a 7-day link",
+	freeTtl.init.status === 402 && /24 hours/.test(String(freeTtl.init.body.message)),
+	JSON.stringify(freeTtl.init.body),
+);
+const freeShareSalt = await api("/api/v1/shares/salt", { token });
+const freePassword = await makeShare(token, freeBytes, {
+	filename: "locked.txt",
+	password: await shareVerifier("open sesame", freeShareSalt.body.salt, freeShareSalt.body.iterations),
+	password_salt: freeShareSalt.body.salt,
+});
+check(
+	"Free is refused a password-protected link",
+	freePassword.init.status === 402 && /Pro/.test(String(freePassword.init.body.message)),
+	JSON.stringify(freePassword.init.body),
+);
+
+// The half of the rule that reads like a bug, which is why it is asserted
+// rather than assumed: the link is dead, its bytes are gone, and the slot is
+// still spoken for — because the path is still reserved (SHARE_RECORD_TTL_MS).
+await api(`/api/v1/shares/${onlyLink.init.body.share_id}/revoke`, { method: "POST", token });
+const afterRevokeFree = await makeShare(token, freeBytes, { filename: "after-revoke.txt" });
+check(
+	"revoking does not hand the slot back — only deleting does",
+	afterRevokeFree.init.status === 402,
+	`${afterRevokeFree.init.status} ${JSON.stringify(afterRevokeFree.init.body)}`,
+);
+
+// And the exemption that rule forces: without it, one is an allowance a
+// restore can never fit inside, because the row is in its own count.
+const freeRestore = await restoreShare(token, onlyLink.init.body.share_id, freeBytes);
+check(
+	"a link at the ceiling can still be restored — it is not counted against itself",
+	freeRestore.init.status === 200 && freeRestore.complete?.status === 200,
+	`${freeRestore.init.status} ${JSON.stringify(freeRestore.init.body)}`,
+);
+
+const freeDeleted = await api(`/api/v1/shares/${onlyLink.init.body.share_id}`, {
+	method: "DELETE",
+	token,
+});
+check("the one link can be deleted", freeDeleted.status === 200, JSON.stringify(freeDeleted.body));
+const afterDeleteFree = await makeShare(token, freeBytes, { filename: "after-delete.txt" });
+check(
+	"and deleting frees the slot",
+	afterDeleteFree.init.status === 201,
+	`${afterDeleteFree.init.status} ${JSON.stringify(afterDeleteFree.init.body)}`,
+);
+// Left empty for the Pro sections below, which count their own records.
+await api(`/api/v1/shares/${afterDeleteFree.init.body.share_id}`, { method: "DELETE", token });
 
 const walledSecond = await api("/api/v1/inboxes", {
 	method: "POST",
@@ -918,8 +1007,9 @@ const resumeRevoked = await api(`/api/v1/shares/${revokedShare.init.body.share_i
 	method: "PATCH", token, body: JSON.stringify({ paused: false }),
 });
 check("a revoked link cannot be resumed", resumeRevoked.status === 400, `${resumeRevoked.status}`);
-// Hands back the active-share slot. Free allows three, and a section that keeps
-// one alive spends part of the next section's budget rather than its own.
+// Hands the slot back. A section that leaves a link alive spends part of the
+// next section's budget rather than its own — and a slot is only released by
+// deleting the record, so revoking here would not do it.
 await api(`/api/v1/shares/${pausable.init.body.share_id}`, { method: "DELETE", token });
 
 section("A link that ended can be restored, with the same file");
@@ -2185,8 +2275,9 @@ check("an inbox cannot be moved to an empty path", emptySlug.status === 400);
 await api(`/api/v1/inboxes/${occupiedId}`, { method: "DELETE", token });
 
 section("Every link carries a path (PRD 6.2)");
-// There is no bare-subdomain address, so none of the three ways to get an inbox
-// will accept an empty path, and the bare host resolves to nothing.
+// There is no bare-subdomain address, so no way of getting an inbox will accept
+// an empty path, and the bare host resolves to nothing. Registration is the one
+// caller allowed to ask for no inbox at all — but not for one without a path.
 const bare = await api(on(NAME, "/api/v1/resolve"));
 check("the bare subdomain is not an address", bare.status === 404);
 
@@ -2204,15 +2295,66 @@ const blankSlugCreate = await api("/api/v1/inboxes", {
 });
 check("whitespace is not a path either", blankSlugCreate.status === 400);
 
-const noSlugRegister = await api("/api/v1/devices", {
+const blankSlugRegister = await register(
+	`e2e-${Math.random().toString(36).slice(2, 10)}`,
+	await makeDevice(),
+	"   ",
+);
+check("registering with a blank path is refused", blankSlugRegister.status === 400);
+
+/*
+ * Registering with no path at all, which is what iOS does: the name is the
+ * identity and the address comes later, when a folder is there to name it. Its
+ * own keys rather than the main device's, because this device survives the call
+ * and lives on in D1 — shared keys would make it indistinguishable while
+ * debugging.
+ */
+const pathless = `e2e-${Math.random().toString(36).slice(2, 10)}`;
+const pathlessRegister = await register(pathless, await makeDevice(), null);
+check(
+	"registering without a path is allowed",
+	pathlessRegister.status === 201,
+	JSON.stringify(pathlessRegister.body),
+);
+check("and creates no inbox", pathlessRegister.body.inbox === undefined);
+const pathlessToken = pathlessRegister.body.token as string;
+
+const pathlessMe = await api("/api/v1/devices/me", { token: pathlessToken });
+check(
+	"a device registered without a path owns no addresses",
+	pathlessMe.status === 200 && pathlessMe.body.inboxes.length === 0,
+	JSON.stringify(pathlessMe.body),
+);
+const pathlessBare = await api(on(pathless, "/api/v1/resolve"));
+check("its bare subdomain resolves to nothing", pathlessBare.status === 404);
+const pathlessGuess = await api(on(pathless, "/api/v1/resolve?slug=inbox"));
+check("and no path was invented on its behalf", pathlessGuess.status === 404);
+
+// The other half of the iOS flow: the address is created once a folder wants
+// one, and the free ceiling is what stops the second folder.
+const firstAddress = await api("/api/v1/inboxes", {
 	method: "POST",
-	body: JSON.stringify({
-		name: `e2e-${Math.random().toString(36).slice(2, 10)}`,
-		pubkey_sig: device.pubkey_sig,
-		pubkey_kex: device.pubkey_kex,
-	}),
+	token: pathlessToken,
+	body: JSON.stringify({ slug: "folder-a", display_name: "Folder A" }),
 });
-check("registration without a path is refused", noSlugRegister.status === 400);
+check(
+	"the first address can be created after registration",
+	firstAddress.status === 201 && firstAddress.body.slug === "folder-a",
+	JSON.stringify(firstAddress.body),
+);
+const firstAddressLive = await api(on(pathless, "/api/v1/resolve?slug=folder-a"));
+check("and it resolves immediately", firstAddressLive.status === 200);
+
+const secondAddress = await api("/api/v1/inboxes", {
+	method: "POST",
+	token: pathlessToken,
+	body: JSON.stringify({ slug: "folder-b", display_name: "Folder B" }),
+});
+check(
+	"a second address on free is an upgrade wall, not a quota error",
+	secondAddress.status === 402 && secondAddress.body.error === "upgrade_required",
+	JSON.stringify(secondAddress.body),
+);
 
 section("Deleting a link frees its path (PRD 6.2)");
 const firstBefore = await api(on(NAME, "/api/v1/resolve?slug=inbox"));

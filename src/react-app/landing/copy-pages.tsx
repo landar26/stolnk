@@ -225,6 +225,7 @@ export const pagesEn = {
 		proFootnote: "One payment. Yours permanently.",
 		rows: [
 			{ label: "Inboxes", free: "1", pro: "As many as you like" },
+			{ label: "Outbound share links", free: "1", pro: "100" },
 			{ label: "Relayed files", free: "3 GB / month", pro: "300 GB / month" },
 			{ label: "Largest single file", free: "2 GB", pro: "20 GB" },
 			{ label: "Held while your Mac sleeps", free: "24 hours", pro: "7 days" },
@@ -485,6 +486,7 @@ export const pagesZh: typeof pagesEn = {
 		proFootnote: "付一次，永久属于你。",
 		rows: [
 			{ label: "收件箱数量", free: "1 个", pro: "不限个数" },
+			{ label: "对外分享链接", free: "1 个", pro: "100 个" },
 			{ label: "中转流量", free: "3 GB / 月", pro: "300 GB / 月" },
 			{ label: "单文件上限", free: "2 GB", pro: "20 GB" },
 			{ label: "Mac 睡眠时的保留时长", free: "24 小时", pro: "7 天" },

@@ -96,7 +96,7 @@ export function transferExpired(fields: { inbox_id: string; bytes: number }): vo
  * recorded here is a user who wanted a second folder, whether or not they paid.
  */
 export function upgradeWallHit(fields: {
-	wall: "second_inbox" | "password" | "share_ttl" | "share_password" | "active_shares";
+	wall: "second_inbox" | "password" | "share_ttl" | "share_password" | "share_limit";
 }): void {
 	emit("upgrade.wall", fields);
 }

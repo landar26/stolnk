@@ -39,7 +39,20 @@ export interface Tier {
 	/** Outbound links have their own storage ceiling so they cannot starve inbox delivery. */
 	shareStorageQuota: number;
 	maxShareTtlHours: number;
-	maxActiveShares: number;
+	/**
+	 * How many outbound links this tier may have — counted as *records*, not as
+	 * links that are currently serving.
+	 *
+	 * A slot is released by deleting a link and by nothing else. That follows
+	 * from a decision one layer down (lib/share.ts): revoking keeps the record so
+	 * the path stays reserved for seven days, which is what stops anyone holding
+	 * an old URL from being handed a different file at the same address.
+	 * Deleting is the owner saying they are done with that address, and it is
+	 * already a separate, confirmed action. Tying the slot to "is it serving"
+	 * instead would mean a revoked link quietly freed the path's protection in
+	 * one place while keeping it in another.
+	 */
+	maxShares: number;
 	sharePassword: boolean;
 }
 
@@ -54,7 +67,7 @@ export const FREE: Tier = {
 	monthlyRelayBytes: 3 * 1024 ** 3,
 	shareStorageQuota: 2 * 1024 ** 3,
 	maxShareTtlHours: 24,
-	maxActiveShares: 3,
+	maxShares: 1,
 	sharePassword: false,
 };
 
@@ -72,7 +85,7 @@ export const PRO: Tier = {
 	// about $0.75/month and reduce that margin to only 52 months.
 	shareStorageQuota: 20 * 1024 ** 3,
 	maxShareTtlHours: 720,
-	maxActiveShares: 100,
+	maxShares: 100,
 	sharePassword: true,
 };
 
