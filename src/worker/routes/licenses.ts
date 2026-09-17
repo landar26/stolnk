@@ -1,6 +1,12 @@
 import { Hono } from "hono";
 import { FREE, PRO, PRO_SEATS, RATE_MAX_LICENSE } from "../limits";
 import { activate, deactivate, keyHash, CreemError } from "../lib/creem";
+import {
+	APPLE_BUNDLE_ID,
+	APPLE_PRO_PRODUCT_ID,
+	AppleStoreError,
+	transactionInfo,
+} from "../lib/apple-store";
 import { requireDevice } from "../lib/deviceauth";
 import { applyTierToInboxes, pauseInboxesOverFreeLimit, pauseSharesOverFreeLimit, planFor, resumeShares } from "../lib/entitlement";
 import {
@@ -31,6 +37,93 @@ const MAX_KEY = 128;
 
 licenses.get("/status", async (c) => {
 	const deviceId = await requireDevice(c.env, c.req.raw);
+	return c.json(await planFor(c.env, deviceId));
+});
+
+/**
+ * Turns a StoreKit 2 transaction into the service-side entitlement that all
+ * quota checks use. No receipt fields from the phone are trusted: the only
+ * input is an opaque transaction id, which is looked up again at Apple.
+ */
+licenses.post("/apple/verify", async (c) => {
+	enforce(`license:${clientIp(c)}`, RATE_MAX_LICENSE);
+	const deviceId = await requireDevice(c.env, c.req.raw);
+	const body = await readJson<{ transaction_id?: unknown }>(c);
+	const transactionId = requireString(body.transaction_id, "transaction_id", 32);
+	if (!/^\d+$/.test(transactionId)) return badRequest("Invalid App Store transaction id.");
+
+	let transaction;
+	try {
+		transaction = await transactionInfo(c.env, transactionId);
+	} catch (error) {
+		if (error instanceof AppleStoreError) {
+			return fail(
+				error.status,
+				error.status === 404 ? "purchase_not_found" : "purchase_verification_failed",
+				error.message,
+			);
+		}
+		throw error;
+	}
+
+	if (
+		transaction.bundleId !== APPLE_BUNDLE_ID ||
+		transaction.productId !== APPLE_PRO_PRODUCT_ID ||
+		transaction.type !== "Non-Consumable"
+	) {
+		return fail(400, "purchase_invalid", "This purchase doesn't unlock Stolnk Pro.");
+	}
+
+	const now = Date.now();
+	const refunded = typeof transaction.revocationDate === "number";
+	await c.env.DB.prepare(
+		`INSERT INTO apple_purchases
+		 (original_transaction_id, transaction_id, product_id, environment, status,
+		  purchased_at, revocation_date, last_verified_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT (original_transaction_id) DO UPDATE SET
+		   transaction_id = excluded.transaction_id,
+		   status = excluded.status,
+		   revocation_date = excluded.revocation_date,
+		   last_verified_at = excluded.last_verified_at`,
+	)
+		.bind(
+			transaction.originalTransactionId,
+			transaction.transactionId,
+			transaction.productId,
+			transaction.environment,
+			refunded ? "refunded" : "active",
+			transaction.purchaseDate,
+			transaction.revocationDate ?? null,
+			now,
+		)
+		.run();
+
+	if (refunded) {
+		const devices = await c.env.DB.prepare(
+			"SELECT device_id FROM apple_purchase_devices WHERE original_transaction_id = ?",
+		)
+			.bind(transaction.originalTransactionId)
+			.all<{ device_id: string }>();
+		for (const device of devices.results) {
+			await applyTierToInboxes(c.env, device.device_id, FREE);
+			await pauseInboxesOverFreeLimit(c.env, device.device_id);
+			await pauseSharesOverFreeLimit(c.env, device.device_id);
+		}
+		return c.json(await planFor(c.env, deviceId));
+	}
+
+	await c.env.DB.prepare(
+		`INSERT INTO apple_purchase_devices (device_id, original_transaction_id, activated_at)
+		 VALUES (?, ?, ?)
+		 ON CONFLICT (device_id) DO UPDATE SET
+		   original_transaction_id = excluded.original_transaction_id,
+		   activated_at = excluded.activated_at`,
+	)
+		.bind(deviceId, transaction.originalTransactionId, now)
+		.run();
+	await applyTierToInboxes(c.env, deviceId, PRO);
+	await resumeShares(c.env, deviceId);
 	return c.json(await planFor(c.env, deviceId));
 });
 

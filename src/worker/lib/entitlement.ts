@@ -54,6 +54,15 @@ export interface PlanState {
  * One query, one index hit, on a table most rows will never appear in.
  */
 export async function tierFor(env: Env, deviceId: string): Promise<Tier> {
+	const apple = await env.DB.prepare(
+		`SELECT p.status FROM apple_purchase_devices d
+		 JOIN apple_purchases p ON p.original_transaction_id = d.original_transaction_id
+		 WHERE d.device_id = ?`,
+	)
+		.bind(deviceId)
+		.first<{ status: string }>();
+	if (apple?.status === "active") return PRO;
+
 	const row = await env.DB.prepare(
 		`SELECT l.status FROM license_devices d
 		 JOIN licenses l ON l.key_hash = d.key_hash
@@ -66,6 +75,23 @@ export async function tierFor(env: Env, deviceId: string): Promise<Tier> {
 
 /** Everything the settings screen shows about the plan, in one round trip. */
 export async function planFor(env: Env, deviceId: string): Promise<PlanState> {
+	const apple = await env.DB.prepare(
+		`SELECT p.status FROM apple_purchase_devices d
+		 JOIN apple_purchases p ON p.original_transaction_id = d.original_transaction_id
+		 WHERE d.device_id = ?`,
+	)
+		.bind(deviceId)
+		.first<{ status: string }>();
+	if (apple?.status === "active") {
+		const used = await relayUsed(env, deviceId);
+		return {
+			tier: PRO.name,
+			relay_used: used,
+			relay_limit: PRO.monthlyRelayBytes,
+			share_limit: PRO.maxShares,
+		};
+	}
+
 	const row = await env.DB.prepare(
 		`SELECT l.key_hash, l.status, l.seats FROM license_devices d
 		 JOIN licenses l ON l.key_hash = d.key_hash

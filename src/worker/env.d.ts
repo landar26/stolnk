@@ -9,6 +9,10 @@
  * reports what production is missing.
  */
 interface Env {
+	/** App Store Server API key used only to validate iOS transactions. */
+	APPLE_KEY_ID: string;
+	APPLE_ISSUER_ID: string;
+	APPLE_PRIVATE_KEY: string;
 	/** Server-side Creem API key. Never leaves the Worker (PRD 16.5). */
 	CREEM_API_KEY: string;
 	/** Shared secret for verifying the `creem-signature` header on webhooks. */
