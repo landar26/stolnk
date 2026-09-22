@@ -1,9 +1,10 @@
 import { Hono } from "hono";
-import { FREE, PRO_SEATS } from "../limits";
+import { PRO_SEATS } from "../limits";
 import { keyHash, signatureValid } from "../lib/creem";
-import { applyTierToInboxes, pauseInboxesOverFreeLimit, pauseSharesOverFreeLimit } from "../lib/entitlement";
+import { downgradeToFree } from "../lib/entitlement";
 import { type AppEnv } from "../lib/http";
 import { licenseRevoked, licenseRevokeUnmatched } from "../lib/metrics";
+import { appleNotificationRoute } from "./webhooks-apple";
 
 /**
  * Creem's side of the conversation (PRD 16.5).
@@ -26,6 +27,12 @@ import { licenseRevoked, licenseRevokeUnmatched } from "../lib/metrics";
  * body as trusted; nothing above it writes anything.
  */
 export const webhooks = new Hono<AppEnv>();
+
+// Apple's half lives in its own file: its trust model is the inverse of the one
+// documented above (the signature is authentication here; there, the body is
+// only a hint), and mixing the two doc comments would blur both.
+webhooks.post("/apple/:secret", appleNotificationRoute);
+webhooks.post("/apple", appleNotificationRoute);
 
 interface CreemEvent {
 	eventType?: string;
@@ -205,9 +212,7 @@ webhooks.post("/creem", async (c) => {
 		// someone routed their work to, and a webhook that fires by mistake must
 		// be undoable by buying again.
 		for (const row of results) {
-			await applyTierToInboxes(c.env, row.device_id, FREE);
-			await pauseInboxesOverFreeLimit(c.env, row.device_id);
-			await pauseSharesOverFreeLimit(c.env, row.device_id);
+			await downgradeToFree(c.env, row.device_id);
 		}
 
 		licenseRevoked({ reason: kind, devices: results.length });

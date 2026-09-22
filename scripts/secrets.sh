@@ -78,7 +78,7 @@ SUPPLIED=(CREEM_API_KEY CREEM_WEBHOOK_SECRET CREEM_PRODUCT_ID CREEM_DISCOUNT_COD
 
 # Absent is a valid state for these, so `check` reports them without counting
 # them as missing.
-OPTIONAL=(CREEM_DISCOUNT_CODE)
+OPTIONAL=(CREEM_DISCOUNT_CODE APPLE_KEY_ID APPLE_ISSUER_ID APPLE_PRIVATE_KEY APPLE_NOTIFICATION_SECRET ADMIN_TOKEN)
 
 # The two vars that decide which Creem the Worker talks to, and so the whole of
 # what "payment mode" means here. Unset, lib/creem.ts and routes/checkout.ts fall
@@ -92,7 +92,40 @@ OPTIONAL=(CREEM_DISCOUNT_CODE)
 # neither `push` nor `check` will call acceptable.
 OVERRIDES=(CREEM_API_BASE CREEM_CHECKOUT_BASE)
 
-SECRETS=("${GENERATED[@]}" "${SUPPLIED[@]}")
+# The App Store Server API key (PRD 16, the iOS side), plus the shared secret in
+# the notification URL.
+#
+# APPLE_PRIVATE_KEY is a PEM, and how it is written in the file matters. Write
+# it on ONE line with \n escapes, inside DOUBLE quotes: wrangler bundles the
+# standard dotenv parser, which expands \n only for double-quoted values
+# (single quotes and backticks are passed through literally, and
+# `privateKeyBytes` in lib/apple-store.ts would then hand backslashes to atob
+# and throw). One line is also what keeps it safe to grep and to mask — a PEM
+# pasted across many lines defeats every line-oriented way of hiding it, which
+# is how the sibling project leaked a key and had to reissue it.
+#
+# Kept out of SUPPLIED regardless: `push test` filters .dev.vars through a
+# line-oriented sed, and the Apple keys have no business on a test-mode push.
+#
+# They are OPTIONAL because absent is a real state, and was the state of
+# production until this line existed: without them iOS purchases cannot be
+# verified and every phone reads as Free. `check` reporting them is the point —
+# it used to omit them entirely while env.d.ts claimed they were covered here.
+APPLE=(APPLE_KEY_ID APPLE_ISSUER_ID APPLE_PRIVATE_KEY APPLE_NOTIFICATION_SECRET)
+
+# The operator console (migration 0010). Optional in the strongest sense: unset,
+# /admin and /api/v1/admin/* answer 404 and the console does not exist on that
+# deployment. So "unset" here is a deliberate configuration, not a gap — which
+# is why it sits in OPTIONAL rather than being generated like SESSION_SECRET.
+CONSOLE=(ADMIN_TOKEN)
+
+# Like OVERRIDES, but with no live counterpart to be wrong about: this one only
+# ever points transaction lookups at a stub, so it has no business on a deployed
+# Worker at all. Kept out of OVERRIDES on purpose — `check` counts that array's
+# length to decide payment mode, and a third member would break the arithmetic.
+DEV_ONLY=(APPLE_API_BASE)
+
+SECRETS=("${GENERATED[@]}" "${SUPPLIED[@]}" "${APPLE[@]}" "${CONSOLE[@]}")
 
 # The apex origin, duplicated from src/shared/site-origin.ts. `verify` is a
 # shell script and cannot import a TypeScript constant; a wrong value here
@@ -205,6 +238,24 @@ cmd_init() {
 		echo "CREEM_PRODUCT_ID=\"dev-product\""
 		echo "CREEM_DISCOUNT_CODE=\"\""
 		echo "CREEM_WEBHOOK_SECRET=\"$(generate)\""
+		echo ""
+		echo "# The App Store side. APPLE_API_BASE points transaction lookups at the"
+		echo "# stub scripts/e2e.ts starts, for the same reason CREEM_API_BASE does —"
+		echo "# the real one needs a sandbox Apple ID and a TestFlight build. It is"
+		echo "# refused by \`push\`, in either mode: there is no deployed Worker it"
+		echo "# could be right for."
+		echo "#"
+		echo "# The key below is a throwaway generated here, not an App Store key. It"
+		echo "# exists so the ES256 signing path runs; the stub does not check it."
+		echo "APPLE_API_BASE=\"http://127.0.0.1:5200\""
+		echo "APPLE_KEY_ID=\"DEVKEYID\""
+		echo "APPLE_ISSUER_ID=\"dev-issuer\""
+		echo "APPLE_NOTIFICATION_SECRET=\"$(generate)\""
+		echo ""
+		echo "# The operator console at /admin. Generated here so local development"
+		echo "# has one; production gets its own through .prod.vars, or stays off."
+		echo "ADMIN_TOKEN=\"$(generate)\""
+		echo "APPLE_PRIVATE_KEY=\"$(openssl ecparam -genkey -name prime256v1 -noout 2>/dev/null | openssl pkcs8 -topk8 -nocrypt 2>/dev/null)\""
 	} > "$DEV_FILE"
 	echo "wrote $DEV_FILE — local development only, never pushed"
 }
@@ -353,7 +404,24 @@ cmd_push() {
 				exit 1
 				;;
 		esac
-	else
+	fi
+
+	# Live only, because test mode reaches the same end by a different road: the
+	# filtered payload below carries SUPPLIED and OVERRIDES and nothing else, so
+	# a stub base in .dev.vars is simply never sent. .prod.vars goes up whole,
+	# which leaves refusing it as the only way to stop it — and it has to be
+	# stopped, since a stub base on a deployed Worker points it at an address
+	# Cloudflare's edge cannot reach and every purchase verification 503s.
+	if [ "$MODE" != test ]; then
+		for name in "${DEV_ONLY[@]}"; do
+			if grep -q "^$name=" "$file"; then
+				echo "$file sets $name, which is local-only — remove it." >&2
+				exit 1
+			fi
+		done
+	fi
+
+	if [ "$MODE" != test ]; then
 		# The overrides have a home now, and it is not this file. Before, an
 		# override left in .prod.vars was silently honoured and kept.
 		for name in "${OVERRIDES[@]}"; do

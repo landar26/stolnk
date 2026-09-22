@@ -5,6 +5,7 @@ import { refundRelayBytes } from "./lib/entitlement";
 import { utcMonth, type AppEnv } from "./lib/http";
 import {
 	SHARE_CODE_ROUTE,
+	APPLE_NOTIFICATION_TTL_MS,
 	SHARE_RECORD_TTL_MS,
 	TRANSFER_RECORD_TTL_MS,
 	UPLOAD_TOKEN_TTL_MS,
@@ -12,6 +13,9 @@ import {
 import { transferExpired } from "./lib/metrics";
 import { isInboxHost, rewriteInboxPreview } from "./lib/preview";
 import { verifyToken, type DeviceToken, type SignalToken, type UploadToken } from "./lib/tokens";
+import { requireAdmin } from "./lib/admin";
+import { admin } from "./routes/admin";
+import { adminPage } from "./routes/admin-page";
 import { checkout } from "./routes/checkout";
 import { delivery } from "./routes/delivery";
 import { devices, names } from "./routes/devices";
@@ -50,20 +54,26 @@ app.use("*", async (c, next) => {
 		hostname === "127.0.0.1" ||
 		hostname === "[::1]";
 	if (!isLocal) {
-		c.header(
-			"content-security-policy",
-			[
-				"default-src 'self'",
-				"script-src 'self'",
-				"style-src 'self'",
-				"img-src 'self' data: blob:",
-				"connect-src 'self' wss:",
-				"frame-ancestors 'none'",
-				"base-uri 'none'",
-				"form-action 'none'",
-				"object-src 'none'",
-			].join("; "),
-		);
+		// A handler that set its own policy means it, and this one would be wrong
+		// for it: the admin console is a single inline document (routes/admin-page.ts)
+		// that `script-src 'self'` blanks outright. `c.header` replaces rather than
+		// merges, so the check has to happen here, not there.
+		if (!c.res.headers.has("content-security-policy")) {
+			c.header(
+				"content-security-policy",
+				[
+					"default-src 'self'",
+					"script-src 'self'",
+					"style-src 'self'",
+					"img-src 'self' data: blob:",
+					"connect-src 'self' wss:",
+					"frame-ancestors 'none'",
+					"base-uri 'none'",
+					"form-action 'none'",
+					"object-src 'none'",
+				].join("; "),
+			);
+		}
 		c.header("strict-transport-security", "max-age=63072000; includeSubDomains; preload");
 	}
 	c.header("x-content-type-options", "nosniff");
@@ -102,6 +112,11 @@ app.get("/robots.txt", (c) =>
 			: "User-agent: *\nAllow: /\n",
 	),
 );
+// The operator console. `requireAdmin` answers 404 rather than 401 when
+// ADMIN_TOKEN is unset, so a deployment that never configured one exposes
+// nothing — not even a password box (lib/admin.ts).
+app.use("/api/v1/admin/*", requireAdmin);
+app.route("/api/v1/admin", admin);
 app.route("/api/v1/devices", devices);
 app.route("/api/v1/inboxes", inboxes);
 app.route("/api/v1/names", names);
@@ -122,6 +137,12 @@ app.route("/api/v1", delivery);
 // SPA fallback below; only /download/mac and /download/mac/<file> are claimed,
 // leaving bare /download to the page that links to them.
 app.route("/download", downloads);
+// The console's shell, and the host check is load-bearing. Hono routes without
+// regard to hostname, and on `<name>.stolnk.com` every path is an inbox address
+// — `admin` is reserved as a *name* (lib/inbox.ts) but not as a slug, so
+// without this the route would shadow a real inbox at /admin. Falling through
+// rather than 404ing is what hands that request back to the send page.
+app.get("/admin", (c) => (isInboxHost(c.req.url) ? c.notFound() : adminPage(c)));
 app.get(`/:code{${SHARE_CODE_ROUTE}}`, shareLanding);
 app.get(`/:code{${SHARE_CODE_ROUTE}}/:filename`, shareDownload);
 
@@ -436,6 +457,19 @@ async function forgetOldRecords(env: Env, now: number): Promise<void> {
 		 )`,
 	)
 		.bind(now - SHARE_RECORD_TTL_MS)
+		.run();
+
+	// App Store notification receipts. Only the ones that were processed: an
+	// 'error' row is the only record that a refund did not apply, and deleting
+	// it on a timer would erase the evidence before anyone read it.
+	await env.DB.prepare(
+		`DELETE FROM apple_notifications WHERE notification_uuid IN (
+		   SELECT notification_uuid FROM apple_notifications
+		   WHERE process_status = 'ok' AND received_at < ?
+		   LIMIT 500
+		 )`,
+	)
+		.bind(now - APPLE_NOTIFICATION_TTL_MS)
 		.run();
 }
 

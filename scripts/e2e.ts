@@ -149,6 +149,132 @@ const creem = createServer((request, response) => {
 });
 await new Promise<void>((resolve) => creem.listen(CREEM_PORT, "127.0.0.1", resolve));
 
+// ---------------------------------------------------------------------------
+// A stand-in for the App Store Server API, for the same reason the Creem stub
+// exists: a suite that needs a sandbox Apple ID and a TestFlight build is a
+// suite nobody runs. `.dev.vars` points APPLE_API_BASE here.
+//
+// It answers the one call the Worker makes, GET /inApps/v1/transactions/:id,
+// and deliberately does NOT check the ES256 bearer token. Whether that key is
+// the right one is a deploy concern (`npm run secrets:check`), not a routing
+// one, and a stub that checked it would only be testing its own signer.
+// ---------------------------------------------------------------------------
+
+const APPLE_PORT = 5200;
+/**
+ * A transaction id of this run's own, for the same reason the uuids below carry
+ * one: `apple_purchase_devices` is keyed on the device, so every run that
+ * attached to a shared id would add a row to the same purchase and the refund
+ * below would report a device count that grows by one per run.
+ *
+ * Sixteen digits, because the route requires `/^\d+$/` within 32 characters.
+ */
+const APPLE_TXN = "20000009" + String(Math.floor(Math.random() * 1e8)).padStart(8, "0");
+const APPLE_PRODUCT = "com.nbtxy.filego.pro.lifetime";
+
+/** What the App Store will say about APPLE_TXN on the next lookup. */
+const appleState = {
+	revoked: false,
+	productId: APPLE_PRODUCT,
+	/** ok = answer normally; missing = 404 everything; down = 503 everything. */
+	mode: "ok" as "ok" | "missing" | "down",
+};
+
+/**
+ * A JWS whose signature is a literal placeholder.
+ *
+ * Not the test cutting a corner: this repo deliberately does not verify the
+ * signature on either of the two JWS it decodes (see `lib/apple-store.ts` and
+ * `routes/webhooks-apple.ts`), so a stub that produced a real one would be
+ * asserting a property the production code does not have and does not claim.
+ * `decodeUnverifiedJws` splits on "." and reads part 1 only, so the header and
+ * signature need only be non-empty.
+ */
+function unsignedJws(payload: unknown): string {
+	const b64 = (value: string) =>
+		Buffer.from(value, "utf8").toString("base64url");
+	return `${b64(JSON.stringify({ alg: "ES256" }))}.${b64(JSON.stringify(payload))}.notasignature`;
+}
+
+const appleStore = createServer((request, response) => {
+	request.on("data", () => {});
+	request.on("end", () => {
+		const reply = (status: number, payload: unknown) => {
+			response.writeHead(status, { "content-type": "application/json" });
+			response.end(JSON.stringify(payload));
+		};
+		if (!request.url?.startsWith("/inApps/v1/transactions/")) {
+			return reply(404, { errorCode: 4040010 });
+		}
+		if (appleState.mode === "missing") return reply(404, { errorCode: 4040010 });
+		if (appleState.mode === "down") return reply(503, { errorCode: 5000000 });
+		const id = decodeURIComponent(request.url.slice("/inApps/v1/transactions/".length));
+		return reply(200, {
+			signedTransactionInfo: unsignedJws({
+				transactionId: id,
+				originalTransactionId: APPLE_TXN,
+				bundleId: "com.nbtxy.filego",
+				productId: appleState.productId,
+				type: "Non-Consumable",
+				purchaseDate: 1_700_000_000_000,
+				environment: "Sandbox",
+				...(appleState.revoked ? { revocationDate: 1_700_000_100_000 } : {}),
+			}),
+		});
+	});
+});
+await new Promise<void>((resolve) => appleStore.listen(APPLE_PORT, "127.0.0.1", resolve));
+
+/** The notification secret the running dev server is using, read like the Creem one. */
+function devAppleSecret(): string {
+	try {
+		const line = readFileSync(new URL("../.dev.vars", import.meta.url), "utf8")
+			.split("\n")
+			.find((row) => row.startsWith("APPLE_NOTIFICATION_SECRET="));
+		return line ? line.slice(line.indexOf("=") + 1).trim().replace(/^"|"$/g, "") : "";
+	} catch {
+		return "";
+	}
+}
+
+/**
+ * A run-scoped suffix for every notificationUUID.
+ *
+ * Without it the second run of this suite would post uuids the first run
+ * already marked 'ok', and the handler would correctly call them duplicates —
+ * so the tests below would pass once and then fail forever. Apple's uuids are
+ * unique per notification; the fixtures have to be too.
+ */
+const APPLE_RUN = Math.random().toString(36).slice(2, 8);
+
+/** An App Store Server Notification V2, shaped the way Apple sends one. */
+function appleNotice(
+	type: string,
+	uuid: string,
+	originalTransactionId: string | null = APPLE_TXN,
+): string {
+	return JSON.stringify({
+		signedPayload: unsignedJws({
+			notificationType: type,
+			notificationUUID: `${uuid}-${APPLE_RUN}`,
+			version: "2.0",
+			data: originalTransactionId
+				? {
+						bundleId: "com.nbtxy.filego",
+						environment: "Sandbox",
+						signedTransactionInfo: unsignedJws({
+							transactionId: originalTransactionId,
+							originalTransactionId,
+						}),
+					}
+				: {},
+		}),
+	});
+}
+
+const postNotice = (body: string, secret = devAppleSecret()) =>
+	api(`/api/v1/webhooks/apple/${secret}`, { method: "POST", body });
+
 /**
  * The webhook secret the running dev server is using. Read rather than fixed:
  * `npm run secrets:init` generates one, and a test that assumed a constant
@@ -2563,6 +2689,252 @@ check(
 		survived.body.inboxes.find((i: any) => i.slug === "inbox")?.paused === false,
 	JSON.stringify(survived.body.inboxes.map((i: any) => [i.slug, i.paused])),
 );
+
+section("App Store purchases and Apple's notifications (PRD 16 — the iOS side)");
+// The device arrives here Free: the Creem refund above took its licence away
+// and paused the inbox past the free allowance. That is the state a phone is in
+// the moment before it reports a purchase, so it is the right place to start.
+const beforeApple = await api("/api/v1/inboxes", { token });
+const inboxCountBefore = beforeApple.body.inboxes.length;
+
+const appleVerified = await api("/api/v1/licenses/apple/verify", {
+	token,
+	method: "POST",
+	body: JSON.stringify({ transaction_id: APPLE_TXN }),
+});
+check(
+	"a verified App Store transaction makes the device Pro",
+	appleVerified.status === 200 && appleVerified.body.tier === "pro",
+	JSON.stringify(appleVerified.body),
+);
+
+check("a notification with the wrong secret is refused", (await postNotice(appleNotice("REFUND", "u-secret"), "not-the-secret")).status === 401);
+check("a body that is not JSON is refused", (await api(`/api/v1/webhooks/apple/${devAppleSecret()}`, { method: "POST", body: "{" })).status === 400);
+check("a body with no signedPayload is refused", (await postNotice(JSON.stringify({}))).status === 400);
+check("a signedPayload that is not a JWS is refused", (await postNotice(JSON.stringify({ signedPayload: "not-a-jws" }))).status === 400);
+
+// An id this server has never written down. The handler must answer 200 and
+// touch nobody: a non-2xx would make Apple retry for three days over a purchase
+// that will never exist here.
+const orphan = await postNotice(appleNotice("REFUND", "u-orphan", "2000000999999999"));
+check(
+	"a refund for an unknown purchase is acknowledged, not acted on",
+	orphan.status === 200 && orphan.body.ignored === "orphan",
+	JSON.stringify(orphan.body),
+);
+const afterOrphan = await api("/api/v1/licenses/status", { token });
+check(
+	"and it revoked nothing",
+	afterOrphan.body.tier === "pro",
+	JSON.stringify(afterOrphan.body),
+);
+
+appleState.revoked = true;
+const refundNotice = appleNotice("REFUND", "u-refund");
+const appleRefunded = await postNotice(refundNotice);
+check(
+	"a refund notification downgrades the devices on that purchase",
+	appleRefunded.status === 200 && appleRefunded.body.applied === "revoked" && appleRefunded.body.devices === 1,
+	JSON.stringify(appleRefunded.body),
+);
+const afterAppleRefund = await api("/api/v1/licenses/status", { token });
+check("the device is Free again", afterAppleRefund.body.tier === "free", JSON.stringify(afterAppleRefund.body));
+const survivedApple = await api("/api/v1/inboxes", { token });
+check(
+	"an App Store refund pauses inboxes, it never deletes them",
+	survivedApple.body.inboxes.length === inboxCountBefore,
+	`${survivedApple.body.inboxes.length} of ${inboxCountBefore}`,
+);
+
+// Byte-for-byte, the way Apple redelivers.
+const replayed = await postNotice(refundNotice);
+check(
+	"a redelivered notification is recognised and dropped",
+	replayed.status === 200 && replayed.body.ignored === "duplicate",
+	JSON.stringify(replayed.body),
+);
+
+// Apple reversing a refund. Nothing in the handler branches on the notification
+// type — it re-queries and writes whatever Apple now says — which is the only
+// reason this case works at all.
+appleState.revoked = false;
+const reversed = await postNotice(appleNotice("REFUND_REVERSED", "u-reversed"));
+check(
+	"a reversed refund restores Pro on its own",
+	reversed.status === 200 && reversed.body.applied === "active",
+	JSON.stringify(reversed.body),
+);
+check(
+	"and the device is Pro again",
+	(await api("/api/v1/licenses/status", { token })).body.tier === "pro",
+);
+
+appleState.productId = "com.nbtxy.filego.something.else";
+const otherProduct = await postNotice(appleNotice("ONE_TIME_CHARGE", "u-other"));
+check(
+	"a purchase of something else is ignored",
+	otherProduct.status === 200 && otherProduct.body.ignored === "other_product",
+	JSON.stringify(otherProduct.body),
+);
+appleState.productId = APPLE_PRODUCT;
+
+appleState.mode = "missing";
+const unknown = await postNotice(appleNotice("REFUND", "u-unknown"));
+check(
+	"a transaction Apple will not return is acknowledged, not retried",
+	unknown.status === 200 && unknown.body.ignored === "unknown_transaction",
+	JSON.stringify(unknown.body),
+);
+
+// The one case that must NOT become a 200: Apple being down is exactly what the
+// three-day retry window exists for.
+appleState.mode = "down";
+const transient = await postNotice(appleNotice("REFUND", "u-transient"));
+check("an App Store outage answers 500 so Apple retries", transient.status === 500, JSON.stringify(transient.body));
+
+// ...and the retry has to get through. This is the assertion that proves the
+// dedupe keys on `process_status <> 'ok'` rather than on the row existing: a
+// plain INSERT OR IGNORE would call this a duplicate and lose the refund.
+appleState.mode = "ok";
+const retried = await postNotice(appleNotice("REFUND", "u-transient"));
+check(
+	"and the redelivery after it recovers is processed, not deduped",
+	retried.status === 200 && retried.body.applied === "active",
+	JSON.stringify(retried.body),
+);
+
+// What App Store Connect's "Request a Test Notification" button sends.
+const testNotice = await postNotice(appleNotice("TEST", "u-test", null));
+check(
+	"a TEST notification carries no transaction and is acknowledged",
+	testNotice.status === 200 && testNotice.body.ignored === "no_transaction",
+	JSON.stringify(testNotice.body),
+);
+
+section("Operator console (migration 0010 — read, plus Pro by hand)");
+/** The console's token, read from .dev.vars like the Creem and Apple ones. */
+function devAdminToken(): string {
+	try {
+		const line = readFileSync(new URL("../.dev.vars", import.meta.url), "utf8")
+			.split("\n")
+			.find((row) => row.startsWith("ADMIN_TOKEN="));
+		return line ? line.slice(line.indexOf("=") + 1).trim().replace(/^"|"$/g, "") : "";
+	} catch {
+		return "";
+	}
+}
+const ADMIN = devAdminToken();
+const asAdmin = (path: string, options: RequestInit = {}) =>
+	api(`/api/v1/admin${path}`, { ...options, token: ADMIN });
+
+const adminShell = await fetch(`${BASE}/admin`);
+check(
+	"the console's shell is served, and is not indexable",
+	adminShell.status === 200 && /noindex/.test(adminShell.headers.get("x-robots-tag") ?? ""),
+	`${adminShell.status} ${adminShell.headers.get("x-robots-tag")}`,
+);
+check(
+	"it refuses every external origin",
+	/default-src 'none'/.test(adminShell.headers.get("content-security-policy") ?? ""),
+	adminShell.headers.get("content-security-policy") ?? "",
+);
+
+check("the console's data needs a token", (await api("/api/v1/admin/overview")).status === 401);
+check(
+	"and refuses the wrong one",
+	(await api("/api/v1/admin/overview", { token: "x".repeat(40) })).status === 401,
+);
+
+const adminOverview = await asAdmin("/overview");
+check(
+	"the overview counts what is actually there",
+	adminOverview.status === 200 && adminOverview.body.devices.total > 0 && adminOverview.body.devices.pro > 0,
+	JSON.stringify(adminOverview.body.devices),
+);
+const adminUsage = await asAdmin("/usage?days=7");
+check(
+	"the usage series is gap-filled, one point per day",
+	adminUsage.body.series.length === 7 && adminUsage.body.series.every((p: any) => typeof p.bytes === "number"),
+	String(adminUsage.body.series.length),
+);
+check(
+	"the day range is capped rather than trusted",
+	(await asAdmin("/usage?days=99999")).body.days === 90,
+);
+
+// `refundee` is Free: its licence was refunded above and it has no App Store
+// purchase, which makes it the one device here a grant can visibly change.
+const refundDevice = await asAdmin(`/devices?q=${encodeURIComponent(refundName)}`);
+const refundRow = refundDevice.body.devices[0];
+check("the console finds a device by name", refundRow?.name === refundName, JSON.stringify(refundDevice.body.devices.map((d: any) => d.name)));
+check("and reports it as Free", refundRow?.pro === 0, JSON.stringify(refundRow));
+
+check(
+	"a grant with no reason is refused",
+	(await asAdmin(`/devices/${refundRow.device_id}/grant`, {
+		method: "POST",
+		body: JSON.stringify({ note: "   " }),
+	})).status === 400,
+);
+const adminGranted = await asAdmin(`/devices/${refundRow.device_id}/grant`, {
+	method: "POST",
+	body: JSON.stringify({ note: "e2e — granted by hand" }),
+});
+check("granting Pro by hand succeeds", adminGranted.status === 200 && adminGranted.body.status === "active", JSON.stringify(adminGranted.body));
+check(
+	"and the device reads as Pro through its own session",
+	(await api("/api/v1/licenses/status", { token: refundToken })).body.tier === "pro",
+);
+
+const adminRevoked = await asAdmin(`/devices/${refundRow.device_id}/revoke`, {
+	method: "POST",
+	body: JSON.stringify({ note: "e2e — taken back" }),
+});
+check("revoking returns it to Free", adminRevoked.status === 200 && adminRevoked.body.status === "free", JSON.stringify(adminRevoked.body));
+check(
+	"and the device agrees",
+	(await api("/api/v1/licenses/status", { token: refundToken })).body.tier === "free",
+);
+
+// The subtlety worth a test: the main device is Pro through a real App Store
+// purchase. A console revoke must not be able to undo something that was paid
+// for — only the grant it made itself.
+const mainDevice = await asAdmin(`/devices?q=${encodeURIComponent(NAME)}`);
+const mainRow = mainDevice.body.devices.find((d: any) => d.name === NAME);
+await asAdmin(`/devices/${mainRow.device_id}/grant`, {
+	method: "POST",
+	body: JSON.stringify({ note: "e2e — on top of a real purchase" }),
+});
+const revokedPaid = await asAdmin(`/devices/${mainRow.device_id}/revoke`, {
+	method: "POST",
+	body: JSON.stringify({ note: "e2e — the purchase must survive this" }),
+});
+check(
+	"revoking a grant leaves a paid purchase untouched",
+	revokedPaid.body.status === "pro",
+	JSON.stringify(revokedPaid.body),
+);
+check(
+	"and that device is still Pro",
+	(await api("/api/v1/licenses/status", { token })).body.tier === "pro",
+);
+
+check(
+	"a grant for a device that does not exist is a 404",
+	(await asAdmin("/devices/no-such-device/grant", {
+		method: "POST",
+		body: JSON.stringify({ note: "e2e" }),
+	})).status === 404,
+);
+
+const adminBilling = await asAdmin("/billing");
+check(
+	"billing reports the grants it just made",
+	adminBilling.status === 200 && adminBilling.body.admin_grants.some((r: any) => r.status === "revoked"),
+	JSON.stringify(adminBilling.body.admin_grants),
+);
+
+appleStore.close();
 
 creem.close();
 

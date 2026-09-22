@@ -97,7 +97,11 @@ function decodedTransaction(jws: unknown): AppleTransaction {
 export async function transactionInfo(env: Env, transactionId: string): Promise<AppleTransaction> {
 	const auth = await authorization(env);
 	let lastStatus = 404;
-	for (const base of [PRODUCTION, SANDBOX]) {
+	// A single base deliberately disables the production->sandbox fallback: a
+	// stub has no such split, and a second identical request to it would only
+	// make the 404 case ambiguous.
+	const bases = env.APPLE_API_BASE ? [env.APPLE_API_BASE] : [PRODUCTION, SANDBOX];
+	for (const base of bases) {
 		const response = await fetch(`${base}/inApps/v1/transactions/${encodeURIComponent(transactionId)}`, {
 			headers: { Authorization: `Bearer ${auth}` },
 		});
@@ -113,4 +117,27 @@ export async function transactionInfo(env: Env, transactionId: string): Promise<
 		return decodedTransaction(body.signedTransactionInfo);
 	}
 	throw new AppleStoreError(lastStatus === 404 ? 404 : 400, "This App Store purchase wasn't found.");
+}
+
+/**
+ * The claims of a JWS, **without verifying its signature**.
+ *
+ * For the notification endpoint only, and the name says what it does so no
+ * caller can mistake it for verification. `transactionInfo` above decodes the
+ * same way, but the JWS it decodes arrived inside an authenticated HTTPS
+ * response, which is where its trust comes from — a notification's does not.
+ * Everything this returns is a hint; see `routes/webhooks-apple.ts`.
+ *
+ * Null rather than throwing on a malformed input: the caller answers 400 to
+ * that, and a malformed JWS is not an error condition worth a stack trace.
+ */
+export function decodeUnverifiedJws(jws: string): Record<string, unknown> | null {
+	const parts = jws.split(".");
+	if (parts.length !== 3) return null;
+	try {
+		const value: unknown = JSON.parse(decodeBase64Url(parts[1]));
+		return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+	} catch {
+		return null;
+	}
 }

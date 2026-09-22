@@ -63,6 +63,16 @@ export async function tierFor(env: Env, deviceId: string): Promise<Tier> {
 		.first<{ status: string }>();
 	if (apple?.status === "active") return PRO;
 
+	// Handed out by hand (migration 0010). Third rather than first because it is
+	// the rarest of the three: almost no device has a row here, so paying for
+	// this lookup before the two that usually answer would be the wrong order.
+	const granted = await env.DB.prepare(
+		"SELECT status FROM admin_grants WHERE device_id = ?",
+	)
+		.bind(deviceId)
+		.first<{ status: string }>();
+	if (granted?.status === "active") return PRO;
+
 	const row = await env.DB.prepare(
 		`SELECT l.status FROM license_devices d
 		 JOIN licenses l ON l.key_hash = d.key_hash
@@ -83,6 +93,24 @@ export async function planFor(env: Env, deviceId: string): Promise<PlanState> {
 		.bind(deviceId)
 		.first<{ status: string }>();
 	if (apple?.status === "active") {
+		const used = await relayUsed(env, deviceId);
+		return {
+			tier: PRO.name,
+			relay_used: used,
+			relay_limit: PRO.monthlyRelayBytes,
+			share_limit: PRO.maxShares,
+		};
+	}
+
+	const granted = await env.DB.prepare(
+		"SELECT status FROM admin_grants WHERE device_id = ?",
+	)
+		.bind(deviceId)
+		.first<{ status: string }>();
+	if (granted?.status === "active") {
+		// No `license` block: there is no seat to report and no customer portal to
+		// send anyone to. The settings screen renders Pro without a licence the
+		// same way it does for an App Store purchase.
 		const used = await relayUsed(env, deviceId);
 		return {
 			tier: PRO.name,
@@ -236,4 +264,38 @@ export async function resumeShares(env: Env, deviceId: string): Promise<void> {
 	)
 		.bind(deviceId)
 		.run();
+}
+
+/**
+ * Everything that has to happen to a device when its entitlement ends.
+ *
+ * The three calls are one operation, and they had been copied to three call
+ * sites — a refund from Creem, a refund from Apple, a released seat — with a
+ * fourth about to make it four. Order matters, and that is the reason this is a
+ * function rather than a comment: the ceiling comes down first, so a request
+ * racing the downgrade is clamped rather than admitted, and the pauses follow.
+ *
+ * Idempotent, by construction and on purpose. A replayed webhook, a refund
+ * arriving twice, a deactivate retried by a flaky Mac — all land on the same
+ * absolute state, which is what lets every caller stop caring whether it has
+ * run before.
+ */
+export async function downgradeToFree(env: Env, deviceId: string): Promise<void> {
+	await applyTierToInboxes(env, deviceId, FREE);
+	await pauseInboxesOverFreeLimit(env, deviceId);
+	await pauseSharesOverFreeLimit(env, deviceId);
+}
+
+/**
+ * The inverse, and deliberately not symmetric: shares come back, inboxes do
+ * not.
+ *
+ * `pauseInboxesOverFreeLimit` leaves a paused inbox answering 423 rather than
+ * 404, and the Mac's own toggle (`routes/inboxes.ts`) is what un-pauses it — so
+ * a paid-again user chooses which folder returns. Un-pausing here would
+ * silently reopen a link its owner may have been happy to see stop.
+ */
+export async function upgradeToPro(env: Env, deviceId: string): Promise<void> {
+	await applyTierToInboxes(env, deviceId, PRO);
+	await resumeShares(env, deviceId);
 }

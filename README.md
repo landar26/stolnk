@@ -8,6 +8,7 @@ src/worker/          Hono API, Durable Object, D1 and R2 access
   lib/site.ts        The address model: <name>.<host>/<path>, and nothing else knows it
   do/DeviceHub.ts    Signalling — must stay on the hibernation API
   routes/            devices · inboxes · resolve · transfers · delivery · releases
+                     webhooks (Creem) · webhooks-apple (App Store) · admin
 src/shared/          The envelope and the release manifest, shared with the client
 src/react-app/       Send page, landing page, how-it-works, download
 migrations/          D1 schema
@@ -19,6 +20,7 @@ scripts/             e2e suite, vector generation, headless Mac stand-in, publis
 | `npm run dev` | Local stack: worker, D1, R2, Durable Object |
 | `npm run build` | Type-check and build client and worker |
 | `npm run e2e` | End-to-end checks against a running dev server |
+| `npm run secrets:check` | What production is missing, per secret |
 | `npm run vectors` | Regenerate `testdata/vectors.json` |
 | `npm run release:mac -- <dmg>` | Publish a macOS build to R2 (see below) |
 
@@ -34,6 +36,31 @@ hosts file entry. Every link carries a path; the bare subdomain is not an
 address. The dev port is pinned with `strictPort`, because a link that says
 5173 while Vite drifted to 5174 is a dead link. After changing `wrangler.json`,
 run `npm run cf-typegen`.
+
+## The operator console
+
+`stolnk.com/admin` — one page, read-only apart from handing out Pro by hand.
+Overview counters, delivered bytes per day, a device table, and the billing
+picture including any App Store notification the server failed to process.
+That last list is the point of the screen: an unprocessed notification is a
+refund that has not been applied, and nothing else surfaces it.
+
+It exists only where `ADMIN_TOKEN` is set, and only on the apex. Unset — or
+shorter than 24 characters — and `/admin` and `/api/v1/admin/*` both answer 404,
+so a deployment that never configured one exposes no login at all. Set one with:
+
+```
+openssl rand -base64 32   # into .prod.vars as ADMIN_TOKEN=, then npm run secrets:push
+```
+
+`npm run secrets:init` generates one for local development. The page itself
+carries no data and no credential: the token is typed into it, kept in
+`sessionStorage`, and sent only on the API calls.
+
+Granting Pro writes `admin_grants` and is a third source of entitlement beside
+a Creem licence and an App Store purchase — so revoking a grant leaves a real
+purchase alone. Every grant and revoke emits an `admin.grant` line, which is the
+audit trail; there is no ledger table.
 
 ## Publishing the Mac app
 

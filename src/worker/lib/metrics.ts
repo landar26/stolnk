@@ -130,3 +130,57 @@ export function licenseRevokeUnmatched(fields: {
 }): void {
 	emit("license.revoke_unmatched", fields);
 }
+
+/**
+ * One line per App Store notification, whatever became of it.
+ *
+ * The counterpart to `licenseRevokeUnmatched`, for the same reason: the Apple
+ * handler answers 200 to almost everything it cannot act on — an orphan, an
+ * unknown product, a transaction Apple itself will not return — because a
+ * non-2xx makes Apple retry for three days over something that will never
+ * succeed. This line is the only trace that any of it happened.
+ *
+ * The transaction id is here on purpose and is not a new disclosure: it is an
+ * opaque Apple identifier already sitting in `apple_purchases`, and without it
+ * a refund that did not apply cannot be reconciled against App Store Connect.
+ */
+export function appleNotification(fields: {
+	type: string;
+	subtype: string | null;
+	outcome:
+		| "revoked"
+		| "active"
+		| "orphan"
+		| "duplicate"
+		| "no_transaction"
+		| "no_transaction_id"
+		| "unknown_transaction"
+		| "other_product"
+		| "rejected"
+		| "failed";
+	original_transaction_id: string | null;
+	devices: number;
+}): void {
+	emit("apple.notification", fields);
+}
+
+/**
+ * Pro handed out or taken back from the operator console (migration 0010).
+ *
+ * This line *is* the audit trail — there is no ledger table, because Workers
+ * observability is already append-only, timestamped and where the record of
+ * money moving lives. The note is the operator's own words and is carried here
+ * verbatim, so "why did this device have Pro" stays answerable after the row
+ * has been overwritten by a later grant.
+ *
+ * The device name rather than its id: the id is meaningless to the person
+ * reading this back, and the name is already public — it is the subdomain every
+ * one of that device's links is served from.
+ */
+export function adminGrant(fields: {
+	action: "grant" | "revoke";
+	device: string;
+	note: string;
+}): void {
+	emit("admin.grant", fields);
+}

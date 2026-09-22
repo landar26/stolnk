@@ -93,6 +93,16 @@ export const SHARE_TTL_PRESETS = [1, 24, 168, 720] as const;
 export const SHARE_CODE_LENGTH = 16;
 /** Public promise: terminal share metadata, including its plaintext name, lasts seven days. */
 export const SHARE_RECORD_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * How long a processed App Store notification receipt is kept.
+ *
+ * Ten times Apple's three-day redelivery window, so a row deleted here can
+ * never re-open a replay: by the time it goes, Apple has long stopped retrying.
+ * Only 'ok' rows age out — an 'error' row is evidence, and survives until
+ * someone has looked at it.
+ */
+export const APPLE_NOTIFICATION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 export const SHARE_TOKEN_TTL_MS = 10 * 60 * 1000;
 export const RATE_MAX_SHARE_UNLOCK = 10;
 export const RATE_MAX_SHARE_DOWNLOADS = 60;

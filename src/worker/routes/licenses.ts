@@ -1,14 +1,15 @@
 import { Hono } from "hono";
-import { FREE, PRO, PRO_SEATS, RATE_MAX_LICENSE } from "../limits";
+import { PRO_SEATS, RATE_MAX_LICENSE } from "../limits";
 import { activate, deactivate, keyHash, CreemError } from "../lib/creem";
+import { AppleStoreError, transactionInfo } from "../lib/apple-store";
 import {
-	APPLE_BUNDLE_ID,
-	APPLE_PRO_PRODUCT_ID,
-	AppleStoreError,
-	transactionInfo,
-} from "../lib/apple-store";
+	applyApplePurchase,
+	attachDevice,
+	isProUnlock,
+	recordApplePurchase,
+} from "../lib/apple-purchase";
 import { requireDevice } from "../lib/deviceauth";
-import { applyTierToInboxes, pauseInboxesOverFreeLimit, pauseSharesOverFreeLimit, planFor, resumeShares } from "../lib/entitlement";
+import { downgradeToFree, planFor, upgradeToPro } from "../lib/entitlement";
 import {
 	badRequest,
 	clientIp,
@@ -66,64 +67,23 @@ licenses.post("/apple/verify", async (c) => {
 		throw error;
 	}
 
-	if (
-		transaction.bundleId !== APPLE_BUNDLE_ID ||
-		transaction.productId !== APPLE_PRO_PRODUCT_ID ||
-		transaction.type !== "Non-Consumable"
-	) {
+	if (!isProUnlock(transaction)) {
 		return fail(400, "purchase_invalid", "This purchase doesn't unlock Stolnk Pro.");
 	}
 
 	const now = Date.now();
-	const refunded = typeof transaction.revocationDate === "number";
-	await c.env.DB.prepare(
-		`INSERT INTO apple_purchases
-		 (original_transaction_id, transaction_id, product_id, environment, status,
-		  purchased_at, revocation_date, last_verified_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		 ON CONFLICT (original_transaction_id) DO UPDATE SET
-		   transaction_id = excluded.transaction_id,
-		   status = excluded.status,
-		   revocation_date = excluded.revocation_date,
-		   last_verified_at = excluded.last_verified_at`,
-	)
-		.bind(
-			transaction.originalTransactionId,
-			transaction.transactionId,
-			transaction.productId,
-			transaction.environment,
-			refunded ? "refunded" : "active",
-			transaction.purchaseDate,
-			transaction.revocationDate ?? null,
-			now,
-		)
-		.run();
+	const refunded = await recordApplePurchase(c.env, transaction, now);
 
 	if (refunded) {
-		const devices = await c.env.DB.prepare(
-			"SELECT device_id FROM apple_purchase_devices WHERE original_transaction_id = ?",
-		)
-			.bind(transaction.originalTransactionId)
-			.all<{ device_id: string }>();
-		for (const device of devices.results) {
-			await applyTierToInboxes(c.env, device.device_id, FREE);
-			await pauseInboxesOverFreeLimit(c.env, device.device_id);
-			await pauseSharesOverFreeLimit(c.env, device.device_id);
-		}
+		// The calling device is typically not attached yet, so this loop usually
+		// touches nobody — and does not need to. `planFor` reads the now-refunded
+		// status through the join and answers Free regardless.
+		await applyApplePurchase(c.env, transaction.originalTransactionId, true);
 		return c.json(await planFor(c.env, deviceId));
 	}
 
-	await c.env.DB.prepare(
-		`INSERT INTO apple_purchase_devices (device_id, original_transaction_id, activated_at)
-		 VALUES (?, ?, ?)
-		 ON CONFLICT (device_id) DO UPDATE SET
-		   original_transaction_id = excluded.original_transaction_id,
-		   activated_at = excluded.activated_at`,
-	)
-		.bind(deviceId, transaction.originalTransactionId, now)
-		.run();
-	await applyTierToInboxes(c.env, deviceId, PRO);
-	await resumeShares(c.env, deviceId);
+	await attachDevice(c.env, deviceId, transaction.originalTransactionId, now);
+	await upgradeToPro(c.env, deviceId);
 	return c.json(await planFor(c.env, deviceId));
 });
 
@@ -209,8 +169,7 @@ licenses.post("/activate", async (c) => {
 	// or the buyer's own link keeps refusing the large files they just paid to
 	// be able to receive. A device with none yet is not a special case — the
 	// update matches nothing, and the inbox it makes next reads the live tier.
-	await applyTierToInboxes(c.env, deviceId, PRO);
-	await resumeShares(c.env, deviceId);
+	await upgradeToPro(c.env, deviceId);
 
 	licenseActivated({
 		seats_used: license.activation,
@@ -262,9 +221,7 @@ licenses.post("/deactivate", async (c) => {
 	}
 
 	await c.env.DB.prepare("DELETE FROM license_devices WHERE device_id = ?").bind(target).run();
-	await applyTierToInboxes(c.env, target, FREE);
-	await pauseInboxesOverFreeLimit(c.env, target);
-	await pauseSharesOverFreeLimit(c.env, target);
+	await downgradeToFree(c.env, target);
 
 	const remaining = await c.env.DB.prepare(
 		"SELECT count(*) AS n FROM license_devices WHERE key_hash = ?",
