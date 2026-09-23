@@ -1,5 +1,5 @@
 import { APPLE_BUNDLE_ID, APPLE_PRO_PRODUCT_ID, type AppleTransaction } from "./apple-store";
-import { downgradeToFree, upgradeToPro } from "./entitlement";
+import { bindDevice, unbindOthers, upsertPurchase } from "./purchases";
 
 /**
  * Writing an App Store purchase down, from either of the two mouths it can
@@ -13,9 +13,8 @@ import { downgradeToFree, upgradeToPro } from "./entitlement";
  * nothing more, and keeping the writes here makes it impossible to reach them
  * with anything but a re-queried transaction.
  *
- * It is the Apple counterpart to `lib/creem.ts`. `lib/entitlement.ts` is about
- * *reading* a tier on the request path; provider-shaped writes belong next to
- * their provider.
+ * It is the Apple counterpart to `lib/creem.ts`: the provider-shaped half of a
+ * write whose storage is shared by every provider (`lib/purchases.ts`).
  */
 
 /** Whether this is the thing we sell, rather than some other purchase in the same app. */
@@ -28,95 +27,49 @@ export function isProUnlock(transaction: AppleTransaction): boolean {
 }
 
 /**
- * Upserts the purchase, and answers whether Apple says it is revoked.
+ * Upserts the purchase, and answers its id and whether Apple says it is revoked.
  *
- * Absolute, never incremental: every column is overwritten with what this
- * lookup returned. That is what lets a replayed webhook, an out-of-order pair
- * of notifications and a phone re-reporting the same transaction all land on
- * the same row without any of them having to know about the others.
+ * Every field comes off this re-queried transaction, so a replayed webhook, an
+ * out-of-order pair of notifications and a phone re-reporting the same purchase
+ * all land on the same row with the same answer.
  */
 export async function recordApplePurchase(
 	env: Env,
 	transaction: AppleTransaction,
 	now: number,
-): Promise<boolean> {
+): Promise<{ purchaseId: string; refunded: boolean }> {
 	// Only ever read off a re-queried transaction. Inferring this from a
 	// notification payload would hand anyone who can POST the endpoint the power
 	// to revoke a stranger's purchase.
 	const refunded = typeof transaction.revocationDate === "number";
-	await env.DB.prepare(
-		`INSERT INTO apple_purchases
-		 (original_transaction_id, transaction_id, product_id, environment, status,
-		  purchased_at, revocation_date, last_verified_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		 ON CONFLICT (original_transaction_id) DO UPDATE SET
-		   transaction_id = excluded.transaction_id,
-		   status = excluded.status,
-		   revocation_date = excluded.revocation_date,
-		   last_verified_at = excluded.last_verified_at`,
-	)
-		.bind(
-			transaction.originalTransactionId,
-			transaction.transactionId,
-			transaction.productId,
-			transaction.environment,
-			refunded ? "refunded" : "active",
-			transaction.purchaseDate,
-			transaction.revocationDate ?? null,
-			now,
-		)
-		.run();
-	return refunded;
+	const purchaseId = await upsertPurchase(env, "apple", transaction.originalTransactionId, {
+		status: refunded ? "refunded" : "active",
+		productId: transaction.productId,
+		environment: transaction.environment,
+		orderRef: transaction.transactionId,
+		metadata: { revocation_date: transaction.revocationDate ?? null },
+		purchasedAt: transaction.purchaseDate,
+		verifiedAt: now,
+	});
+	return { purchaseId, refunded };
 }
 
 /**
- * Applies a purchase's state to every device attached to it, and answers how
- * many there were.
+ * Points a device at the purchase that unlocked it. One App Store purchase per
+ * device: a phone that re-verifies under a newer purchase is re-pointed, so a
+ * late refund of the old one downgrades nobody.
  *
- * Note what it does *not* do: delete from `apple_purchase_devices`. The Creem
- * refund path drops `license_devices` rows because a seat is a scarce thing
- * that has to go back in the pool; an App Store purchase has no seats, and
- * keeping the link is what lets a reversed refund — or the same phone calling
- * verify again — restore Pro without re-linking anything. `tierFor` reads the
- * purchase's status through the join, so a kept link on a refunded purchase
- * already reads Free.
- *
- * Zero devices is an ordinary answer, not a failure. A refund for a purchase
- * the buyer has since replaced finds none, because `apple_purchase_devices` is
- * keyed on `device_id` and the phone has already re-pointed at the newer
- * purchase — so the late notification correctly downgrades nobody.
+ * Bindings are never dropped on refund. Keeping the link is what lets a
+ * reversed refund — or the same phone calling verify again — restore Pro
+ * without re-linking anything; `tierFor` reads the purchase's status through
+ * the join, so a kept link on a refunded purchase already reads Free.
  */
-export async function applyApplePurchase(
-	env: Env,
-	originalTransactionId: string,
-	refunded: boolean,
-): Promise<number> {
-	const { results } = await env.DB.prepare(
-		"SELECT device_id FROM apple_purchase_devices WHERE original_transaction_id = ?",
-	)
-		.bind(originalTransactionId)
-		.all<{ device_id: string }>();
-	for (const device of results) {
-		if (refunded) await downgradeToFree(env, device.device_id);
-		else await upgradeToPro(env, device.device_id);
-	}
-	return results.length;
-}
-
-/** Points a device at the purchase that unlocked it. One purchase per device. */
 export async function attachDevice(
 	env: Env,
 	deviceId: string,
-	originalTransactionId: string,
+	purchaseId: string,
 	now: number,
 ): Promise<void> {
-	await env.DB.prepare(
-		`INSERT INTO apple_purchase_devices (device_id, original_transaction_id, activated_at)
-		 VALUES (?, ?, ?)
-		 ON CONFLICT (device_id) DO UPDATE SET
-		   original_transaction_id = excluded.original_transaction_id,
-		   activated_at = excluded.activated_at`,
-	)
-		.bind(deviceId, originalTransactionId, now)
-		.run();
+	await unbindOthers(env, "apple", deviceId, purchaseId);
+	await bindDevice(env, purchaseId, deviceId, now);
 }

@@ -1,7 +1,13 @@
 import { Hono } from "hono";
 import { utcDay, utcMonth, badRequest, readJson, requireString, type AppEnv } from "../lib/http";
 import { adminGrant } from "../lib/metrics";
-import { downgradeToFree, upgradeToPro } from "../lib/entitlement";
+import {
+	bindDevice,
+	findPurchase,
+	reconcileDevice,
+	setStatus,
+	upsertPurchase,
+} from "../lib/purchases";
 
 /**
  * The operator console's data, for one person looking at one screen.
@@ -40,24 +46,13 @@ function paging(url: URL): { limit: number; offset: number } {
 }
 
 /**
- * Every device that is Pro, from all three sources at once.
- *
- * A fragment rather than a view because three callers need it in three shapes —
- * a count, a membership test inside a bigger join, and a list. Kept next to
- * `tierFor` in spirit: if a fourth source of entitlement ever appears, both
- * this and that have to change, and having them read alike is what makes the
- * second edit findable.
+ * Every device that is Pro, from every source at once. The same rule `tierFor`
+ * applies to one device, applied to all of them.
  */
 const PRO_DEVICES = `
-	SELECT d.device_id FROM apple_purchase_devices d
-	  JOIN apple_purchases p ON p.original_transaction_id = d.original_transaction_id
+	SELECT DISTINCT d.device_id FROM purchase_devices d
+	  JOIN purchases p ON p.purchase_id = d.purchase_id
 	  WHERE p.status = 'active'
-	UNION
-	SELECT device_id FROM admin_grants WHERE status = 'active'
-	UNION
-	SELECT d.device_id FROM license_devices d
-	  JOIN licenses l ON l.key_hash = d.key_hash
-	  WHERE l.status = 'active'
 `;
 
 admin.get("/overview", async (c) => {
@@ -102,9 +97,9 @@ admin.get("/overview", async (c) => {
 		c.env.DB.prepare("SELECT count(*) AS n FROM waitlist"),
 		// The one number on this screen that is a call to action rather than a
 		// measurement: a notification we failed to process is a refund that has
-		// not been applied. See routes/webhooks-apple.ts.
+		// not been applied. See lib/payment-events.ts.
 		c.env.DB.prepare(
-			"SELECT count(*) AS n FROM apple_notifications WHERE process_status <> 'ok'",
+			"SELECT count(*) AS n FROM payment_events WHERE status <> 'ok'",
 		),
 	]);
 
@@ -174,9 +169,10 @@ admin.get("/devices", async (c) => {
 		        coalesce((SELECT relay_bytes FROM usage_monthly
 		                  WHERE device_id = d.device_id AND month = ?), 0) AS relay_bytes,
 		        (d.device_id IN (${PRO_DEVICES})) AS pro,
-		        (SELECT status FROM admin_grants WHERE device_id = d.device_id) AS grant_status,
-		        (SELECT note FROM admin_grants WHERE device_id = d.device_id) AS grant_note
+		        g.status AS grant_status,
+		        g.note AS grant_note
 		 FROM devices d
+		 LEFT JOIN purchases g ON g.provider = 'admin' AND g.external_id = d.device_id
 		 WHERE (? = '' OR d.name LIKE ?)
 		 ORDER BY d.last_seen DESC
 		 LIMIT ? OFFSET ?`,
@@ -202,28 +198,23 @@ admin.get("/devices", async (c) => {
  * table, and what it means is that somebody's refund did not take effect.
  */
 admin.get("/billing", async (c) => {
-	const [licences, purchases, grants, failed] = await c.env.DB.batch([
-		c.env.DB.prepare("SELECT status, count(*) AS n FROM licenses GROUP BY status"),
+	const [purchases, failed] = await c.env.DB.batch([
 		c.env.DB.prepare(
-			`SELECT status, environment, count(*) AS n FROM apple_purchases
-			 GROUP BY status, environment`,
+			`SELECT provider, status, environment, count(*) AS n FROM purchases
+			 GROUP BY provider, status, environment
+			 ORDER BY provider, status`,
 		),
 		c.env.DB.prepare(
-			"SELECT status, count(*) AS n FROM admin_grants GROUP BY status",
-		),
-		c.env.DB.prepare(
-			`SELECT notification_uuid, notification_type, subtype, original_transaction_id,
-			        received_at, process_status, last_error
-			 FROM apple_notifications WHERE process_status <> 'ok'
+			`SELECT provider, event_id, event_type, subtype, external_ref,
+			        received_at, status, last_error
+			 FROM payment_events WHERE status <> 'ok'
 			 ORDER BY received_at DESC LIMIT 50`,
 		),
 	]);
 
 	return c.json({
-		licenses: licences.results,
-		apple_purchases: purchases.results,
-		admin_grants: grants.results,
-		failed_notifications: failed.results,
+		purchases: purchases.results,
+		failed_events: failed.results,
 	});
 });
 
@@ -248,16 +239,17 @@ admin.post("/devices/:id/grant", async (c) => {
 	if (!device) return c.json({ error: "not_found", message: "No such device." }, 404);
 
 	const now = Date.now();
-	await c.env.DB.prepare(
-		`INSERT INTO admin_grants (device_id, status, note, granted_at, revoked_at)
-		 VALUES (?, 'active', ?, ?, NULL)
-		 ON CONFLICT (device_id) DO UPDATE SET
-		   status = 'active', note = excluded.note,
-		   granted_at = excluded.granted_at, revoked_at = NULL`,
-	)
-		.bind(deviceId, note, now)
-		.run();
-	await upgradeToPro(c.env, deviceId);
+	// A grant is a purchase nobody paid for: keyed on the device it was made to,
+	// unlimited, and carrying the operator's reason. `provider = 'admin'` is what
+	// keeps it out of any "how many did we sell" answer.
+	const purchaseId = await upsertPurchase(c.env, "admin", deviceId, {
+		status: "active",
+		note,
+		purchasedAt: now,
+		verifiedAt: now,
+	});
+	await bindDevice(c.env, purchaseId, deviceId, now);
+	await reconcileDevice(c.env, deviceId);
 
 	adminGrant({ action: "grant", device: device.name, note });
 	return c.json({ ok: true, device: device.name, status: "active" });
@@ -281,30 +273,18 @@ admin.post("/devices/:id/revoke", async (c) => {
 	const note = requireString(body.note, "note", MAX_NOTE).trim();
 	if (!note) return badRequest("Say why this grant is being taken back.");
 
-	const existing = await c.env.DB.prepare(
-		`SELECT g.status, d.name FROM admin_grants g
-		 JOIN devices d ON d.device_id = g.device_id
-		 WHERE g.device_id = ?`,
-	)
+	const device = await c.env.DB.prepare("SELECT name FROM devices WHERE device_id = ?")
 		.bind(deviceId)
-		.first<{ status: string; name: string }>();
-	if (!existing) return c.json({ error: "not_found", message: "No such grant." }, 404);
+		.first<{ name: string }>();
+	const grant = device ? await findPurchase(c.env, "admin", deviceId) : null;
+	if (!device || !grant) return c.json({ error: "not_found", message: "No such grant." }, 404);
 
-	await c.env.DB.prepare(
-		"UPDATE admin_grants SET status = 'revoked', note = ?, revoked_at = ? WHERE device_id = ?",
-	)
-		.bind(note, Date.now(), deviceId)
-		.run();
+	await setStatus(c.env, grant.purchase_id, "revoked", Date.now(), note);
+	// Only downgrades if nothing else is holding this device up. Downgrading a
+	// device that also bought a licence would be the console quietly undoing a
+	// purchase.
+	const tier = await reconcileDevice(c.env, deviceId);
 
-	// Only if nothing else is holding this device up. Downgrading a device that
-	// also bought a licence would be the console quietly undoing a purchase.
-	const stillPro = await c.env.DB.prepare(
-		`SELECT 1 AS yes FROM (${PRO_DEVICES}) WHERE device_id = ?`,
-	)
-		.bind(deviceId)
-		.first<{ yes: number }>();
-	if (!stillPro) await downgradeToFree(c.env, deviceId);
-
-	adminGrant({ action: "revoke", device: existing.name, note });
-	return c.json({ ok: true, device: existing.name, status: stillPro ? "pro" : "free" });
+	adminGrant({ action: "revoke", device: device.name, note });
+	return c.json({ ok: true, device: device.name, status: tier.name });
 });

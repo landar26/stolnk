@@ -192,7 +192,7 @@ function render(overview, usage, devices, billing){
       tile(overview.delivered.month.files + " · " + bytes(overview.delivered.month.bytes), "this month") +
       tile(bytes(overview.relay_bytes_month), "relayed this month") +
       tile(overview.waitlist, "waitlist") +
-      tile(failures, "unprocessed notifications", failures > 0) +
+      tile(failures, "unprocessed webhooks", failures > 0) +
     "</div></section>" +
 
     '<section class="card"><h2>Delivered, last 30 days</h2>' + chart(usage.series) +
@@ -223,21 +223,23 @@ function render(overview, usage, devices, billing){
       "</div></section>" +
 
     '<section class="card"><h2>Billing</h2><div class="tiles">' +
-      billing.licenses.map(function(r){ return tile(r.n, "licences · " + r.status); }).join("") +
-      billing.apple_purchases.map(function(r){ return tile(r.n, "App Store · " + r.status + " · " + r.environment); }).join("") +
-      billing.admin_grants.map(function(r){ return tile(r.n, "granted · " + r.status); }).join("") +
-      (billing.licenses.length || billing.apple_purchases.length || billing.admin_grants.length ? "" :
+      billing.purchases.map(function(r){
+        var label = { creem: "licences", apple: "App Store", admin: "granted" }[r.provider] || r.provider;
+        return tile(r.n, label + " · " + r.status + (r.environment ? " · " + r.environment : ""));
+      }).join("") +
+      (billing.purchases.length ? "" :
         '<div class="tile"><b>0</b><span>nothing sold yet</span></div>') +
     "</div>" +
-      (billing.failed_notifications.length ?
-        '<h2 style="margin-top:16px">Unprocessed App Store notifications</h2>' +
-        '<p class="dim">Each of these is a refund or revocation that has not been applied.</p>' +
-        '<div class="scroll"><table><thead><tr><th>Received</th><th>Type</th><th>Transaction</th><th>State</th><th>Error</th></tr></thead><tbody>' +
-        billing.failed_notifications.map(function(n){
+      (billing.failed_events.length ?
+        '<h2 style="margin-top:16px">Unprocessed payment webhooks</h2>' +
+        '<p class="dim">Each of these is a purchase, refund or revocation that has not been applied.</p>' +
+        '<div class="scroll"><table><thead><tr><th>Received</th><th>Provider</th><th>Type</th><th>Reference</th><th>State</th><th>Error</th></tr></thead><tbody>' +
+        billing.failed_events.map(function(n){
           return "<tr><td>" + esc(when(n.received_at)) + "</td>" +
-            "<td>" + esc(n.notification_type) + (n.subtype ? " · " + esc(n.subtype) : "") + "</td>" +
-            "<td>" + esc(n.original_transaction_id || "—") + "</td>" +
-            '<td><span class="pill bad">' + esc(n.process_status) + "</span></td>" +
+            "<td>" + esc(n.provider) + "</td>" +
+            "<td>" + esc(n.event_type) + (n.subtype ? " · " + esc(n.subtype) : "") + "</td>" +
+            "<td>" + esc(n.external_ref || "—") + "</td>" +
+            '<td><span class="pill bad">' + esc(n.status) + "</span></td>" +
             '<td class="wrap">' + esc(n.last_error || "—") + "</td></tr>";
         }).join("") + "</tbody></table></div>" : "") +
     "</section></main>";

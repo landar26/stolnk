@@ -1,9 +1,21 @@
 import { Hono } from "hono";
 import { PRO_SEATS } from "../limits";
 import { keyHash, signatureValid } from "../lib/creem";
-import { downgradeToFree } from "../lib/entitlement";
 import { type AppEnv } from "../lib/http";
-import { licenseRevoked, licenseRevokeUnmatched } from "../lib/metrics";
+import {
+	licenseRevoked,
+	licenseRevokeUnmatched,
+	paymentEvent,
+	type PaymentOutcome,
+} from "../lib/metrics";
+import { beginEvent, finishEvent } from "../lib/payment-events";
+import {
+	applyPurchaseStatus,
+	findByRef,
+	findPurchase,
+	setStatus,
+	upsertPurchase,
+} from "../lib/purchases";
 import { appleNotificationRoute } from "./webhooks-apple";
 
 /**
@@ -17,10 +29,10 @@ import { appleNotificationRoute } from "./webhooks-apple";
  *
  * The two are not symmetric, and that asymmetry shapes this file. Only the
  * checkout event carries the licence key; a refund carries an order, a
- * checkout, a transaction and a customer, and no key at all. Since `licenses`
+ * checkout, a transaction and a customer, and no key at all. Since `purchases`
  * stores an unrecoverable hash of the key, a refund can only find its row
- * through an identifier written down at purchase — which is what migration 0003
- * exists for, and why the checkout branch below writes more than it needs to.
+ * through an identifier written down at purchase (`order_ref`, `checkout_ref`),
+ * which is why the checkout branch below writes more than it needs to.
  *
  * This route is unauthenticated by necessity — Creem has no device session — so
  * the signature *is* the authentication. Everything below the check treats the
@@ -35,6 +47,7 @@ webhooks.post("/apple/:secret", appleNotificationRoute);
 webhooks.post("/apple", appleNotificationRoute);
 
 interface CreemEvent {
+	id?: unknown;
 	eventType?: string;
 	type?: string;
 	object?: Record<string, unknown>;
@@ -150,90 +163,97 @@ webhooks.post("/creem", async (c) => {
 	const kind = event.eventType ?? event.type ?? "";
 	const key = licenseKeyOf(event);
 	const ids = creemIdsOf(event);
-	const now = Date.now();
+	const eventId = typeof event.id === "string" && event.id ? event.id : null;
 
-	if (kind.startsWith("checkout.completed") || kind.startsWith("license.created")) {
-		// 200 on an event with no key. A non-2xx makes Creem retry with backoff
-		// forever over something that will never succeed.
-		if (!key) return c.json({ ok: true, ignored: kind });
-		const hash = await keyHash(key);
-		const license = licenseObjectOf(event);
-		// Creem's activation limit is the authority on seats — the price list says
-		// three Macs, but the product's own setting is what will actually be
-		// enforced when the Mac calls activate, so record that rather than our copy.
-		const seats =
-			typeof license?.activation_limit === "number" ? license.activation_limit : PRO_SEATS;
-		const licenseId = typeof license?.id === "string" ? license.id : null;
-
-		await c.env.DB.prepare(
-			`INSERT INTO licenses (key_hash, creem_license_id, status, major_version, seats,
-			                       purchased_at, revalidated_at,
-			                       creem_order_id, creem_checkout_id, creem_customer_id)
-			 VALUES (?, ?, 'active', 1, ?, ?, ?, ?, ?, ?)
-			 ON CONFLICT (key_hash) DO UPDATE SET
-			   status = 'active',
-			   revalidated_at = excluded.revalidated_at,
-			   -- coalesce, not replace: a re-delivered or partial event must be able
-			   -- to fill a blank in, and must never blank out what is already there.
-			   creem_license_id = coalesce(excluded.creem_license_id, licenses.creem_license_id),
-			   creem_order_id = coalesce(excluded.creem_order_id, licenses.creem_order_id),
-			   creem_checkout_id = coalesce(excluded.creem_checkout_id, licenses.creem_checkout_id),
-			   creem_customer_id = coalesce(excluded.creem_customer_id, licenses.creem_customer_id)`,
-		)
-			.bind(hash, licenseId, seats, now, now, ids.order, ids.checkout, ids.customer)
-			.run();
-		return c.json({ ok: true });
+	const fresh = await beginEvent(c.env, {
+		provider: "creem",
+		eventId,
+		type: kind || "unknown",
+		subtype: null,
+		externalRef: ids.order ?? ids.checkout,
+		payload: raw,
+	});
+	if (!fresh) {
+		paymentEvent({ provider: "creem", type: kind, subtype: null, outcome: "duplicate", external_ref: ids.order, devices: 0 });
+		return c.json({ ok: true, ignored: "duplicate" });
 	}
 
-	if (kind.startsWith("refund") || kind.startsWith("dispute") || kind.includes("revoked")) {
-		// The key first, for the shapes that still carry one, then the order the
-		// licence was sold under. Customer is deliberately not a fallback: one
-		// person can hold several licences, and refunding one must not revoke the
-		// others.
-		const hash = key ? await keyHash(key) : await hashForOrder(c.env, ids);
-		if (!hash) {
-			licenseRevokeUnmatched({ reason: kind, order_id: ids.order, checkout_id: ids.checkout });
-			return c.json({ ok: true, ignored: kind });
-		}
+	/** Records how this ended, and answers Creem. */
+	const done = async (outcome: PaymentOutcome, body: Record<string, unknown>, devices = 0) => {
+		await finishEvent(c.env, "creem", eventId, "ok", outcome);
+		paymentEvent({ provider: "creem", type: kind, subtype: null, outcome, external_ref: ids.order, devices });
+		return c.json({ ok: true, ...body });
+	};
 
-		const { results } = await c.env.DB.prepare(
-			"SELECT device_id FROM license_devices WHERE key_hash = ?",
-		)
-			.bind(hash)
-			.all<{ device_id: string }>();
-
-		await c.env.DB.batch([
-			c.env.DB.prepare("UPDATE licenses SET status = 'refunded' WHERE key_hash = ?").bind(hash),
-			c.env.DB.prepare("DELETE FROM license_devices WHERE key_hash = ?").bind(hash),
-		]);
-
-		// Back to the free ceilings, and inboxes past the free allowance are
-		// paused. Paused, never deleted: a refund must not destroy the folders
-		// someone routed their work to, and a webhook that fires by mistake must
-		// be undoable by buying again.
-		for (const row of results) {
-			await downgradeToFree(c.env, row.device_id);
-		}
-
-		licenseRevoked({ reason: kind, devices: results.length });
-		return c.json({ ok: true });
+	try {
+		return await handle();
+	} catch (error) {
+		// Stamped before rethrowing, so the 500 earns a retry that `beginEvent`
+		// will actually let through.
+		await finishEvent(
+			c.env,
+			"creem",
+			eventId,
+			"error",
+			"failed",
+			error instanceof Error ? error.message : String(error),
+		);
+		paymentEvent({ provider: "creem", type: kind, subtype: null, outcome: "failed", external_ref: ids.order, devices: 0 });
+		throw error;
 	}
 
-	return c.json({ ok: true, ignored: kind });
+	async function handle() {
+		const now = Date.now();
+
+		if (kind.startsWith("checkout.completed") || kind.startsWith("license.created")) {
+			// 200 on an event with no key. A non-2xx makes Creem retry with backoff
+			// forever over something that will never succeed.
+			if (!key) return done("ignored", { ignored: kind });
+			const license = licenseObjectOf(event);
+			// Creem's activation limit is the authority on seats — the price list says
+			// three Macs, but the product's own setting is what will actually be
+			// enforced when the Mac calls activate, so record that rather than our copy.
+			const seats =
+				typeof license?.activation_limit === "number" ? license.activation_limit : PRO_SEATS;
+			const licenseId = typeof license?.id === "string" ? license.id : null;
+
+			await upsertPurchase(c.env, "creem", await keyHash(key), {
+				status: "active",
+				seats,
+				orderRef: ids.order,
+				checkoutRef: ids.checkout,
+				customerRef: ids.customer,
+				metadata: licenseId ? { license_id: licenseId } : {},
+				purchasedAt: now,
+				verifiedAt: now,
+			});
+			return done("recorded", {});
+		}
+
+		if (kind.startsWith("refund") || kind.startsWith("dispute") || kind.includes("revoked")) {
+			// The key first, for the shapes that still carry one, then the order the
+			// licence was sold under.
+			const purchase = key
+				? await findPurchase(c.env, "creem", await keyHash(key))
+				: await findByRef(c.env, "creem", ids);
+			if (!purchase) {
+				licenseRevokeUnmatched({ reason: kind, order_id: ids.order, checkout_id: ids.checkout });
+				return done("unmatched", { ignored: kind });
+			}
+
+			await setStatus(c.env, purchase.purchase_id, "refunded", now);
+			// Back to the free ceilings unless something else still holds a device
+			// up, and inboxes past the free allowance are paused. Paused, never
+			// deleted: a refund must not destroy the folders someone routed their
+			// work to, and a webhook that fires by mistake must be undoable by
+			// buying again.
+			// Seats are released too, as Creem does on its side.
+			const devices = await applyPurchaseStatus(c.env, purchase.purchase_id, true);
+
+			licenseRevoked({ reason: kind, devices });
+			return done("revoked", {}, devices);
+		}
+
+		return done("ignored", { ignored: kind });
+	}
 });
-
-/** The reverse of what the checkout branch wrote down. Order first: it is the
- * narrower of the two, and a checkout that was never completed has no row. */
-async function hashForOrder(env: Env, ids: CreemIds): Promise<string | null> {
-	for (const [column, value] of [
-		["creem_order_id", ids.order],
-		["creem_checkout_id", ids.checkout],
-	] as const) {
-		if (!value) continue;
-		const row = await env.DB.prepare(`SELECT key_hash FROM licenses WHERE ${column} = ?`)
-			.bind(value)
-			.first<{ key_hash: string }>();
-		if (row) return row.key_hash;
-	}
-	return null;
-}

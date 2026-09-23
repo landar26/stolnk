@@ -5,7 +5,7 @@ import { refundRelayBytes } from "./lib/entitlement";
 import { utcMonth, type AppEnv } from "./lib/http";
 import {
 	SHARE_CODE_ROUTE,
-	APPLE_NOTIFICATION_TTL_MS,
+	PAYMENT_EVENT_TTL_MS,
 	SHARE_RECORD_TTL_MS,
 	TRANSFER_RECORD_TTL_MS,
 	UPLOAD_TOKEN_TTL_MS,
@@ -422,10 +422,6 @@ async function sweepShares(env: Env, now: number): Promise<void> {
  * for `expired` — so there is no state this can reach in which an object is
  * still parked. The cascade takes `files` and `file_parts` with the transfer.
  *
- * `declined` is still in the filter below even though nothing writes it any
- * more: rows from before the first-receive prompt was removed still carry it,
- * and dropping it from the list would strand them here forever.
- *
  * What it deliberately does not touch is `usage_daily` and `usage_monthly`.
  * Those are accounting, keyed by inbox and by device rather than by transfer,
  * and returning allowance because a record aged out would make forgetting a
@@ -441,7 +437,7 @@ async function forgetOldRecords(env: Env, now: number): Promise<void> {
 	await env.DB.prepare(
 		`DELETE FROM transfers WHERE transfer_id IN (
 		   SELECT transfer_id FROM transfers
-		   WHERE state IN ('delivered', 'declined', 'aborted', 'expired')
+		   WHERE state IN ('delivered', 'aborted', 'expired')
 		     AND created_at < ?
 		   LIMIT 500
 		 )`,
@@ -459,17 +455,17 @@ async function forgetOldRecords(env: Env, now: number): Promise<void> {
 		.bind(now - SHARE_RECORD_TTL_MS)
 		.run();
 
-	// App Store notification receipts. Only the ones that were processed: an
-	// 'error' row is the only record that a refund did not apply, and deleting
-	// it on a timer would erase the evidence before anyone read it.
+	// Payment webhook receipts. Only the ones that were processed: an 'error'
+	// row is the only record that a refund did not apply, and deleting it on a
+	// timer would erase the evidence before anyone read it.
 	await env.DB.prepare(
-		`DELETE FROM apple_notifications WHERE notification_uuid IN (
-		   SELECT notification_uuid FROM apple_notifications
-		   WHERE process_status = 'ok' AND received_at < ?
+		`DELETE FROM payment_events WHERE rowid IN (
+		   SELECT rowid FROM payment_events
+		   WHERE status = 'ok' AND received_at < ?
 		   LIMIT 500
 		 )`,
 	)
-		.bind(now - APPLE_NOTIFICATION_TTL_MS)
+		.bind(now - PAYMENT_EVENT_TTL_MS)
 		.run();
 }
 

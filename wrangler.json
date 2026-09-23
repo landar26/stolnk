@@ -3,11 +3,19 @@
 	"name": "stolnk",
 	"main": "./src/worker/index.ts",
 	"compatibility_date": "2025-10-08",
-	"compatibility_flags": ["nodejs_compat"],
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
 	"workers_dev": false,
 	"routes": [
-		{ "pattern": "stolnk.com/*", "zone_name": "stolnk.com" },
-		{ "pattern": "*.stolnk.com/*", "zone_name": "stolnk.com" }
+		{
+			"pattern": "stolnk.com/*",
+			"zone_name": "stolnk.com"
+		},
+		{
+			"pattern": "*.stolnk.com/*",
+			"zone_name": "stolnk.com"
+		}
 	],
 	"observability": {
 		"enabled": true
@@ -23,6 +31,7 @@
 		{
 			"binding": "DB",
 			"database_name": "stolnk-db",
+			"database_id": "bb8231d6-92c2-40d5-84b5-cbe6544d5cfb",
 			"migrations_dir": "migrations"
 		}
 	],
@@ -47,10 +56,14 @@
 	"migrations": [
 		{
 			"tag": "v1",
-			"new_sqlite_classes": ["DeviceHub"]
+			"new_sqlite_classes": [
+				"DeviceHub"
+			]
 		}
 	],
 	"triggers": {
-		"crons": ["*/30 * * * *"]
+		"crons": [
+			"*/30 * * * *"
+		]
 	}
 }

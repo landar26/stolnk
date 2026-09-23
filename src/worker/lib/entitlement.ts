@@ -17,8 +17,8 @@ import { utcMonth } from "./http";
  *
  * Revocation therefore arrives out of band, from the refund webhook
  * (routes/webhooks.ts) — and only from there. There is no polling backstop, and
- * that is a consequence of a deliberate choice made one layer down: `licenses`
- * stores only a SHA-256 of the key, and Creem's validate endpoint needs the key
+ * that is a consequence of a deliberate choice made one layer down: `purchases`
+ * stores only a SHA-256 of a Creem key, and Creem's validate endpoint needs the key
  * itself. Keeping every customer's key in recoverable form so that a sweep
  * could re-ask a question the webhook already answers would turn the licence
  * table into something worth stealing.
@@ -27,7 +27,7 @@ import { utcMonth } from "./http";
  * active. Creem retries with backoff, so this means a sustained outage of this
  * endpoint, and the failure is bounded — one refunded user keeping Pro until
  * someone notices, against a database that is not a pile of working keys.
- * `licenses.revalidated_at` records when Creem last confirmed a row, so the
+ * `purchases.verified_at` records when the provider last confirmed a row, so the
  * stale ones are findable by hand.
  */
 
@@ -43,120 +43,66 @@ export interface PlanState {
 	 * allowed to decide.
 	 */
 	share_limit: number;
-	/** Present only on Pro. `seats` mirrors the activation limit set in Creem. */
+	/** Present only for a seated source (a Creem licence). `seats` mirrors Creem's activation limit. */
 	license?: { seats: number; seats_used: number; status: string };
 }
 
 /**
- * Pro is the presence of a seat on a licence that is still good. Anything else
- * — no licence, a refunded one, a disabled one — is Free.
+ * Pro is being bound to at least one purchase that is still good — from any
+ * provider, including a grant by hand. Anything else is Free.
  *
- * One query, one index hit, on a table most rows will never appear in.
+ * One query, one index hit on `purchase_devices (device_id)`, a table most
+ * devices never appear in.
  */
 export async function tierFor(env: Env, deviceId: string): Promise<Tier> {
-	const apple = await env.DB.prepare(
-		`SELECT p.status FROM apple_purchase_devices d
-		 JOIN apple_purchases p ON p.original_transaction_id = d.original_transaction_id
-		 WHERE d.device_id = ?`,
-	)
-		.bind(deviceId)
-		.first<{ status: string }>();
-	if (apple?.status === "active") return PRO;
-
-	// Handed out by hand (migration 0010). Third rather than first because it is
-	// the rarest of the three: almost no device has a row here, so paying for
-	// this lookup before the two that usually answer would be the wrong order.
-	const granted = await env.DB.prepare(
-		"SELECT status FROM admin_grants WHERE device_id = ?",
-	)
-		.bind(deviceId)
-		.first<{ status: string }>();
-	if (granted?.status === "active") return PRO;
-
 	const row = await env.DB.prepare(
-		`SELECT l.status FROM license_devices d
-		 JOIN licenses l ON l.key_hash = d.key_hash
-		 WHERE d.device_id = ?`,
+		`SELECT 1 AS yes FROM purchase_devices d
+		 JOIN purchases p ON p.purchase_id = d.purchase_id
+		 WHERE d.device_id = ? AND p.status = 'active'
+		 LIMIT 1`,
 	)
 		.bind(deviceId)
-		.first<{ status: string }>();
-	return row?.status === "active" ? PRO : FREE;
+		.first<{ yes: number }>();
+	return row ? PRO : FREE;
 }
 
-/** Everything the settings screen shows about the plan, in one round trip. */
+/** Everything the settings screen shows about the plan. */
 export async function planFor(env: Env, deviceId: string): Promise<PlanState> {
-	const apple = await env.DB.prepare(
-		`SELECT p.status FROM apple_purchase_devices d
-		 JOIN apple_purchases p ON p.original_transaction_id = d.original_transaction_id
-		 WHERE d.device_id = ?`,
+	// Seated sources first: when a device holds a licence *and* something
+	// unlimited, the licence is the one with seats worth showing and releasing.
+	const source = await env.DB.prepare(
+		`SELECT p.purchase_id, p.status, p.seats FROM purchase_devices d
+		 JOIN purchases p ON p.purchase_id = d.purchase_id
+		 WHERE d.device_id = ? AND p.status = 'active'
+		 ORDER BY p.seats IS NULL
+		 LIMIT 1`,
 	)
 		.bind(deviceId)
-		.first<{ status: string }>();
-	if (apple?.status === "active") {
-		const used = await relayUsed(env, deviceId);
-		return {
-			tier: PRO.name,
-			relay_used: used,
-			relay_limit: PRO.monthlyRelayBytes,
-			share_limit: PRO.maxShares,
-		};
-	}
+		.first<{ purchase_id: string; status: string; seats: number | null }>();
 
-	const granted = await env.DB.prepare(
-		"SELECT status FROM admin_grants WHERE device_id = ?",
-	)
-		.bind(deviceId)
-		.first<{ status: string }>();
-	if (granted?.status === "active") {
-		// No `license` block: there is no seat to report and no customer portal to
-		// send anyone to. The settings screen renders Pro without a licence the
-		// same way it does for an App Store purchase.
-		const used = await relayUsed(env, deviceId);
-		return {
-			tier: PRO.name,
-			relay_used: used,
-			relay_limit: PRO.monthlyRelayBytes,
-			share_limit: PRO.maxShares,
-		};
-	}
-
-	const row = await env.DB.prepare(
-		`SELECT l.key_hash, l.status, l.seats FROM license_devices d
-		 JOIN licenses l ON l.key_hash = d.key_hash
-		 WHERE d.device_id = ?`,
-	)
-		.bind(deviceId)
-		.first<{ key_hash: string; status: string; seats: number }>();
-
-	const tier = row?.status === "active" ? PRO : FREE;
-	const used = await relayUsed(env, deviceId);
-
-	if (!row) {
-		return {
-			tier: tier.name,
-			relay_used: used,
-			relay_limit: tier.monthlyRelayBytes,
-			share_limit: tier.maxShares,
-		};
-	}
-
-	const seats = await env.DB.prepare(
-		"SELECT count(*) AS n FROM license_devices WHERE key_hash = ?",
-	)
-		.bind(row.key_hash)
-		.first<{ n: number }>();
-
-	return {
+	const tier = source ? PRO : FREE;
+	const plan: PlanState = {
 		tier: tier.name,
-		relay_used: used,
+		relay_used: await relayUsed(env, deviceId),
 		relay_limit: tier.monthlyRelayBytes,
 		share_limit: tier.maxShares,
-		license: {
-			seats: row.seats || PRO_SEATS,
-			seats_used: seats?.n ?? 0,
-			status: row.status,
-		},
 	};
+
+	// No `license` block for an unlimited source (App Store, admin grant): there
+	// is no seat to report and no customer portal to send anyone to.
+	if (source && source.seats !== null) {
+		const used = await env.DB.prepare(
+			"SELECT count(*) AS n FROM purchase_devices WHERE purchase_id = ?",
+		)
+			.bind(source.purchase_id)
+			.first<{ n: number }>();
+		plan.license = {
+			seats: source.seats || PRO_SEATS,
+			seats_used: used?.n ?? 0,
+			status: source.status,
+		};
+	}
+	return plan;
 }
 
 export async function relayUsed(env: Env, deviceId: string, month = utcMonth()): Promise<number> {

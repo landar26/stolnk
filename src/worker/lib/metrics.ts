@@ -120,8 +120,8 @@ export function licenseRevoked(fields: { reason: string; devices: number }): voi
  * Louder than it looks: the refund route answers 200 to these (a non-2xx makes
  * Creem retry forever over something that will never succeed), so this line is
  * the only trace that money went back out and a seat did not. It fires for a
- * purchase made before migration 0003 recorded order ids, and for any payload
- * shape Creem changes underneath us.
+ * checkout webhook that never arrived, and for any payload shape Creem changes
+ * underneath us.
  */
 export function licenseRevokeUnmatched(fields: {
 	reason: string;
@@ -132,40 +132,46 @@ export function licenseRevokeUnmatched(fields: {
 }
 
 /**
- * One line per App Store notification, whatever became of it.
+ * One line per payment-provider webhook, whatever became of it.
  *
- * The counterpart to `licenseRevokeUnmatched`, for the same reason: the Apple
- * handler answers 200 to almost everything it cannot act on — an orphan, an
- * unknown product, a transaction Apple itself will not return — because a
- * non-2xx makes Apple retry for three days over something that will never
+ * The webhook handlers answer 200 to almost everything they cannot act on — an
+ * orphan, an unknown product, a refund for an order nobody bought — because a
+ * non-2xx makes the provider retry for days over something that will never
  * succeed. This line is the only trace that any of it happened.
  *
- * The transaction id is here on purpose and is not a new disclosure: it is an
- * opaque Apple identifier already sitting in `apple_purchases`, and without it
- * a refund that did not apply cannot be reconciled against App Store Connect.
+ * `external_ref` (an order id, an App Store transaction id) is here on purpose
+ * and is not a new disclosure: it is an opaque provider identifier already
+ * sitting in `purchases`, and without it a refund that did not apply cannot be
+ * reconciled against the provider's own dashboard.
  */
-export function appleNotification(fields: {
+export type PaymentOutcome =
+	| "recorded"
+	| "revoked"
+	| "active"
+	| "unmatched"
+	| "ignored"
+	| "orphan"
+	| "duplicate"
+	| "no_transaction"
+	| "no_transaction_id"
+	| "unknown_transaction"
+	| "other_product"
+	| "rejected"
+	| "failed";
+
+export function paymentEvent(fields: {
+	provider: "creem" | "apple";
 	type: string;
 	subtype: string | null;
-	outcome:
-		| "revoked"
-		| "active"
-		| "orphan"
-		| "duplicate"
-		| "no_transaction"
-		| "no_transaction_id"
-		| "unknown_transaction"
-		| "other_product"
-		| "rejected"
-		| "failed";
-	original_transaction_id: string | null;
+	outcome: PaymentOutcome;
+	external_ref: string | null;
 	devices: number;
 }): void {
-	emit("apple.notification", fields);
+	emit("payment.event", fields);
 }
 
 /**
- * Pro handed out or taken back from the operator console (migration 0010).
+ * Pro handed out or taken back from the operator console .
  *
  * This line *is* the audit trail — there is no ledger table, because Workers
  * observability is already append-only, timestamped and where the record of

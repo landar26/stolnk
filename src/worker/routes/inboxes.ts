@@ -228,7 +228,7 @@ inboxes.delete("/:id/transfers", async (c) => {
 	// the cascade too, so a single transfer carrying one file comes back as two.
 	// The Mac puts this number in front of the user — "cleared 2 records" for one
 	// file is a small lie, and it is the only feedback the action gives.
-	const TERMINAL = "('delivered', 'declined', 'aborted', 'expired')";
+	const TERMINAL = "('delivered', 'aborted', 'expired')";
 	const counted = await c.env.DB.prepare(
 		`SELECT count(*) AS n FROM transfers WHERE inbox_id = ? AND state IN ${TERMINAL}`,
 	)

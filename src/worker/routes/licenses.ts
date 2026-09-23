@@ -2,14 +2,21 @@ import { Hono } from "hono";
 import { PRO_SEATS, RATE_MAX_LICENSE } from "../limits";
 import { activate, deactivate, keyHash, CreemError } from "../lib/creem";
 import { AppleStoreError, transactionInfo } from "../lib/apple-store";
-import {
-	applyApplePurchase,
-	attachDevice,
-	isProUnlock,
-	recordApplePurchase,
-} from "../lib/apple-purchase";
+import { attachDevice, isProUnlock, recordApplePurchase } from "../lib/apple-purchase";
 import { requireDevice } from "../lib/deviceauth";
-import { downgradeToFree, planFor, upgradeToPro } from "../lib/entitlement";
+import { planFor } from "../lib/entitlement";
+import {
+	activeBinding,
+	applyPurchaseStatus,
+	binding,
+	bindDevice,
+	findPurchase,
+	reconcileDevice,
+	seatsUsed,
+	unbindDevice,
+	unbindOthers,
+	upsertPurchase,
+} from "../lib/purchases";
 import {
 	badRequest,
 	clientIp,
@@ -72,18 +79,18 @@ licenses.post("/apple/verify", async (c) => {
 	}
 
 	const now = Date.now();
-	const refunded = await recordApplePurchase(c.env, transaction, now);
+	const { purchaseId, refunded } = await recordApplePurchase(c.env, transaction, now);
 
 	if (refunded) {
-		// The calling device is typically not attached yet, so this loop usually
-		// touches nobody — and does not need to. `planFor` reads the now-refunded
-		// status through the join and answers Free regardless.
-		await applyApplePurchase(c.env, transaction.originalTransactionId, true);
+		// The calling device is typically not attached yet, so this usually touches
+		// nobody — and does not need to. `planFor` reads the now-refunded status
+		// through the join and answers accordingly.
+		await applyPurchaseStatus(c.env, purchaseId);
 		return c.json(await planFor(c.env, deviceId));
 	}
 
-	await attachDevice(c.env, deviceId, transaction.originalTransactionId, now);
-	await upgradeToPro(c.env, deviceId);
+	await attachDevice(c.env, deviceId, purchaseId, now);
+	await reconcileDevice(c.env, deviceId);
 	return c.json(await planFor(c.env, deviceId));
 });
 
@@ -102,13 +109,11 @@ licenses.post("/activate", async (c) => {
 	const key = requireString(body.key, "key", MAX_KEY).trim();
 
 	const hash = await keyHash(key);
-	const existing = await c.env.DB.prepare(
-		"SELECT key_hash FROM license_devices WHERE device_id = ?",
-	)
-		.bind(deviceId)
-		.first<{ key_hash: string }>();
+	// Only a licence that still grants something counts. One that was refunded
+	// or disabled must not stop the same Mac from activating a replacement.
+	const existing = await activeBinding(c.env, "creem", deviceId);
 	if (existing) {
-		if (existing.key_hash === hash) {
+		if (existing.external_id === hash) {
 			// Re-entering the same key is not an error — it is what someone does when
 			// they are not sure it took. Burning a second seat for it would be.
 			return c.json(await planFor(c.env, deviceId));
@@ -150,26 +155,21 @@ licenses.post("/activate", async (c) => {
 	}
 
 	const now = Date.now();
-	await c.env.DB.batch([
-		c.env.DB.prepare(
-			`INSERT INTO licenses (key_hash, creem_license_id, status, major_version, seats,
-			                       purchased_at, revalidated_at)
-			 VALUES (?, ?, 'active', 1, ?, ?, ?)
-			 ON CONFLICT (key_hash) DO UPDATE SET
-			   status = 'active', creem_license_id = excluded.creem_license_id,
-			   seats = excluded.seats, revalidated_at = excluded.revalidated_at`,
-		).bind(hash, license.id, license.activation_limit ?? PRO_SEATS, now, now),
-		c.env.DB.prepare(
-			`INSERT INTO license_devices (device_id, key_hash, instance_id, activated_at)
-			 VALUES (?, ?, ?, ?)`,
-		).bind(deviceId, hash, instanceId, now),
-	]);
+	const purchaseId = await upsertPurchase(c.env, "creem", hash, {
+		status: "active",
+		seats: license.activation_limit ?? PRO_SEATS,
+		metadata: { license_id: license.id },
+		purchasedAt: now,
+		verifiedAt: now,
+	});
+	await unbindOthers(c.env, "creem", deviceId, purchaseId, true);
+	await bindDevice(c.env, purchaseId, deviceId, now, instanceId);
 
 	// Every inbox this device already has carries the free 2 GB ceiling. Raise it,
 	// or the buyer's own link keeps refusing the large files they just paid to
 	// be able to receive. A device with none yet is not a special case — the
 	// update matches nothing, and the inbox it makes next reads the live tier.
-	await upgradeToPro(c.env, deviceId);
+	await reconcileDevice(c.env, deviceId);
 
 	licenseActivated({
 		seats_used: license.activation,
@@ -201,34 +201,30 @@ licenses.post("/deactivate", async (c) => {
 	const target = requireString(body.device_id, "device_id", 64);
 
 	const hash = await keyHash(key);
-	const seat = await c.env.DB.prepare(
-		"SELECT instance_id FROM license_devices WHERE device_id = ? AND key_hash = ?",
-	)
-		.bind(target, hash)
-		.first<{ instance_id: string }>();
+	const purchase = await findPurchase(c.env, "creem", hash);
+	const seat = purchase ? await binding(c.env, purchase.purchase_id, target) : null;
 	// Same answer whether the key is wrong or the device is not on it: this route
 	// is reachable without a session, and it must not become a way to test keys
 	// or to ask which devices a licence covers.
-	if (!seat) return notFound("No such activation for that licence.");
+	if (!purchase || !seat) return notFound("No such activation for that licence.");
 
-	try {
-		await deactivate(c.env, key, seat.instance_id);
-	} catch (error) {
-		// Creem having already dropped the instance is a success for our purposes:
-		// the seat is free, which is what the caller asked for. Anything else is
-		// left alone rather than half-applied.
-		if (!(error instanceof CreemError) || error.status !== 404) throw error;
+	if (seat.instance_ref) {
+		try {
+			await deactivate(c.env, key, seat.instance_ref);
+		} catch (error) {
+			// Creem having already dropped the instance is a success for our purposes:
+			// the seat is free, which is what the caller asked for. Anything else is
+			// left alone rather than half-applied.
+			if (!(error instanceof CreemError) || error.status !== 404) throw error;
+		}
 	}
 
-	await c.env.DB.prepare("DELETE FROM license_devices WHERE device_id = ?").bind(target).run();
-	await downgradeToFree(c.env, target);
+	await unbindDevice(c.env, purchase.purchase_id, target);
+	// Not a bare downgrade: a device that also holds another source stays Pro.
+	await reconcileDevice(c.env, target);
 
-	const remaining = await c.env.DB.prepare(
-		"SELECT count(*) AS n FROM license_devices WHERE key_hash = ?",
-	)
-		.bind(hash)
-		.first<{ n: number }>();
-	licenseReleased({ seats_used: remaining?.n ?? 0 });
+	const remaining = await seatsUsed(c.env, purchase.purchase_id);
+	licenseReleased({ seats_used: remaining });
 
-	return c.json({ released: true, seats_used: remaining?.n ?? 0 });
+	return c.json({ released: true, seats_used: remaining });
 });

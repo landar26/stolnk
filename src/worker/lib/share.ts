@@ -21,7 +21,7 @@ export interface ShareRow {
 	upload_id: string | null;
 	filename: string;
 	size: number;
-	sha256: string;
+	sha256: string | null;
 	password_salt: string | null;
 	password_verifier_hash: string | null;
 	max_downloads: number | null;

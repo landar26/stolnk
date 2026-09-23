@@ -198,11 +198,6 @@ export async function openTransfer(
 	}
 
 	const transferId = randomId();
-	// Vestigial: `transfers.sender_session` is NOT NULL and used to key the
-	// remembered "always accept from this link" decisions. Those are gone, and
-	// dropping the column would mean rebuilding the largest table in the schema,
-	// so it is filled with a value nobody reads.
-	const senderSession = randomId();
 	const senderIsOwner = options.senderIsOwner ? 1 : 0;
 	const expiresAt = now + tier.ttlHours * 60 * 60 * 1000;
 
@@ -218,11 +213,11 @@ export async function openTransfer(
 	});
 
 	await env.DB.prepare(
-		`INSERT INTO transfers (transfer_id, inbox_id, sender_session, state, total_bytes,
+		`INSERT INTO transfers (transfer_id, inbox_id, state, total_bytes,
 		                        sender_is_owner, created_at, expires_at, transport)
-		 VALUES (?, ?, ?, 'uploading', ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, 'uploading', ?, ?, ?, ?, ?)`,
 	)
-		.bind(transferId, inboxId, senderSession, totalBytes, senderIsOwner, now, expiresAt, transport)
+		.bind(transferId, inboxId, totalBytes, senderIsOwner, now, expiresAt, transport)
 		.run();
 
 	const created: OpenedFile[] = [];

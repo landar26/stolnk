@@ -5,9 +5,11 @@ import {
 	transactionInfo,
 	type AppleTransaction,
 } from "../lib/apple-store";
-import { applyApplePurchase, isProUnlock, recordApplePurchase } from "../lib/apple-purchase";
+import { isProUnlock, recordApplePurchase } from "../lib/apple-purchase";
 import { type AppEnv } from "../lib/http";
-import { appleNotification, licenseRevoked } from "../lib/metrics";
+import { licenseRevoked, paymentEvent, type PaymentOutcome } from "../lib/metrics";
+import { beginEvent, finishEvent } from "../lib/payment-events";
+import { applyPurchaseStatus, findPurchase } from "../lib/purchases";
 
 /**
  * Apple's side of the conversation: App Store Server Notifications V2.
@@ -55,11 +57,6 @@ function stringOr(value: unknown, fallback: string): string {
 
 function optionalString(value: unknown): string | null {
 	return typeof value === "string" && value ? value : null;
-}
-
-async function sha256Hex(input: string): Promise<string> {
-	const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
-	return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 /**
@@ -134,59 +131,39 @@ export async function appleNotificationRoute(c: Context<AppEnv>) {
 	const hintedOriginal = optionalString(hint?.originalTransactionId);
 
 	/** Records how this ended, and answers Apple. */
-	const done = async (
-		outcome: Parameters<typeof appleNotification>[0]["outcome"],
-		body: Record<string, unknown>,
-		devices = 0,
-	) => {
-		await markProcessed(c.env, uuid, "ok", null);
-		appleNotification({
+	const done = async (outcome: PaymentOutcome, body: Record<string, unknown>, devices = 0) => {
+		await finishEvent(c.env, "apple", uuid, "ok", outcome);
+		paymentEvent({
+			provider: "apple",
 			type,
 			subtype,
 			outcome,
-			original_transaction_id: hintedOriginal,
+			external_ref: hintedOriginal,
 			devices,
 		});
 		return c.json({ ok: true, ...body });
 	};
 
-	if (uuid) {
-		// `process_status <> 'ok'` is the whole point. A dedupe that bailed on the
-		// mere existence of a row would swallow Apple's retry of a notification we
-		// failed on: the retry would find the 'pending' row this request left
-		// behind, call itself a duplicate, answer 200, and the refund would be
-		// lost in exactly the case the retry exists for.
-		const inserted = await c.env.DB.prepare(
-			`INSERT INTO apple_notifications
-			   (notification_uuid, notification_type, subtype, original_transaction_id,
-			    payload_sha256, received_at, process_status)
-			 VALUES (?, ?, ?, ?, ?, ?, 'pending')
-			 ON CONFLICT (notification_uuid) DO UPDATE SET
-			   notification_type = excluded.notification_type,
-			   subtype = excluded.subtype,
-			   original_transaction_id = excluded.original_transaction_id,
-			   payload_sha256 = excluded.payload_sha256,
-			   received_at = excluded.received_at,
-			   process_status = 'pending'
-			 WHERE apple_notifications.process_status <> 'ok'`,
-		)
-			.bind(uuid, type, subtype, hintedOriginal, await sha256Hex(signedPayload), Date.now())
-			.run();
-		// `?? 1`, not `?? 0`: if D1 does not report a change count the safe default
-		// is to process, because processing is idempotent by construction while
-		// skipping loses a refund. Two concurrent deliveries of one uuid can both
-		// see 'pending' and both run; that is accepted rather than locked against,
-		// since the second is a no-op and a lock can strand a row in 'pending'.
-		if ((inserted.meta.changes ?? 1) === 0) {
-			appleNotification({
-				type,
-				subtype,
-				outcome: "duplicate",
-				original_transaction_id: hintedOriginal,
-				devices: 0,
-			});
-			return c.json({ ok: true, ignored: "duplicate" });
-		}
+	// Dedupe semantics, and why a failed row does not count as a duplicate, are
+	// documented on `beginEvent`.
+	const fresh = await beginEvent(c.env, {
+		provider: "apple",
+		eventId: uuid,
+		type,
+		subtype,
+		externalRef: hintedOriginal,
+		payload: signedPayload,
+	});
+	if (!fresh) {
+		paymentEvent({
+			provider: "apple",
+			type,
+			subtype,
+			outcome: "duplicate",
+			external_ref: hintedOriginal,
+			devices: 0,
+		});
+		return c.json({ ok: true, ignored: "duplicate" });
 	}
 	// A notification with no uuid is not deduped at all. It should not happen;
 	// if it does, processing it twice is harmless and dropping it is not.
@@ -201,20 +178,14 @@ export async function appleNotificationRoute(c: Context<AppEnv>) {
 			return await done("no_transaction_id", { ignored: "no_transaction_id" });
 		}
 
-		// The local lookup matches the *hint's* id, which is the key in
-		// apple_purchases; the write further down keys off the *re-queried*
+		// The local lookup matches the *hint's* id, which is the purchase's
+		// external_id; the write further down keys off the *re-queried*
 		// response. They are the same value in every real case, and spelling them
 		// differently is what keeps the trust boundary visible.
 		//
 		// Short-circuiting here also means someone posting made-up ids never
 		// reaches Apple at all.
-		const known = hintedOriginal
-			? await c.env.DB.prepare(
-					"SELECT original_transaction_id FROM apple_purchases WHERE original_transaction_id = ?",
-				)
-					.bind(hintedOriginal)
-					.first<{ original_transaction_id: string }>()
-			: null;
+		const known = hintedOriginal ? await findPurchase(c.env, "apple", hintedOriginal) : null;
 		if (!known) return await done("orphan", { ignored: "orphan" });
 
 		let transaction: AppleTransaction | null;
@@ -241,12 +212,8 @@ export async function appleNotificationRoute(c: Context<AppEnv>) {
 			return await done("other_product", { ignored: "other_product" });
 		}
 
-		const refunded = await recordApplePurchase(c.env, transaction, Date.now());
-		const devices = await applyApplePurchase(
-			c.env,
-			transaction.originalTransactionId,
-			refunded,
-		);
+		const { purchaseId, refunded } = await recordApplePurchase(c.env, transaction, Date.now());
+		const devices = await applyPurchaseStatus(c.env, purchaseId);
 		if (refunded) licenseRevoked({ reason: `apple:${type}`, devices });
 		return await done(refunded ? "revoked" : "active", {
 			applied: refunded ? "revoked" : "active",
@@ -254,42 +221,23 @@ export async function appleNotificationRoute(c: Context<AppEnv>) {
 		}, devices);
 	} catch (error) {
 		// Stamp the row before rethrowing, so the 500 `onError` produces earns a
-		// retry that the `<> 'ok'` predicate above will actually let through.
-		await markProcessed(c.env, uuid, "error", error instanceof Error ? error.message : String(error));
-		appleNotification({
+		// retry that `beginEvent` will actually let through.
+		await finishEvent(
+			c.env,
+			"apple",
+			uuid,
+			"error",
+			"failed",
+			error instanceof Error ? error.message : String(error),
+		);
+		paymentEvent({
+			provider: "apple",
 			type,
 			subtype,
 			outcome: "failed",
-			original_transaction_id: hintedOriginal,
+			external_ref: hintedOriginal,
 			devices: 0,
 		});
 		throw error;
 	}
-}
-
-/**
- * Stamps the receipt, and swallows its own failure on purpose.
- *
- * Failing to write 'ok' must not flip the outcome of a notification that was
- * applied: the 500 it would produce sends Apple back to re-apply something
- * already applied. The reverse is not swallowed — see the catch above, which
- * stamps 'error' and then rethrows.
- */
-async function markProcessed(
-	env: Env,
-	uuid: string | null,
-	status: "ok" | "error",
-	lastError: string | null,
-): Promise<void> {
-	if (!uuid) return;
-	await env.DB.prepare(
-		`UPDATE apple_notifications
-		 SET process_status = ?, processed_at = ?, last_error = ?
-		 WHERE notification_uuid = ?`,
-	)
-		.bind(status, Date.now(), lastError, uuid)
-		.run()
-		.catch((error: unknown) => {
-			console.warn("apple notification receipt not stamped", { uuid, status, error });
-		});
 }

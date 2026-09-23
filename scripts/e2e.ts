@@ -163,7 +163,7 @@ await new Promise<void>((resolve) => creem.listen(CREEM_PORT, "127.0.0.1", resol
 const APPLE_PORT = 5200;
 /**
  * A transaction id of this run's own, for the same reason the uuids below carry
- * one: `apple_purchase_devices` is keyed on the device, so every run that
+ * one: an App Store purchase keeps its device bindings, so every run that
  * attached to a shared id would add a row to the same purchase and the refund
  * below would report a device count that grows by one per run.
  *
@@ -2561,8 +2561,11 @@ section("Checkout webhook (Creem's current license_keys payload)");
 // order id in particular is the only thing the refund below will have to go on.
 const ORDER_ID = `ord_e2e_${Math.random().toString(36).slice(2, 8)}`;
 const CHECKOUT_ID = `ch_e2e_${Math.random().toString(36).slice(2, 8)}`;
+// Creem's event ids are unique per event and the server dedupes on them, so the
+// fixtures carry a run-scoped suffix for the same reason `APPLE_RUN` exists.
+const CREEM_RUN = Math.random().toString(36).slice(2, 8);
 const checkoutBody = JSON.stringify({
-	id: "evt_e2e_checkout",
+	id: `evt_e2e_checkout_${CREEM_RUN}`,
 	eventType: "checkout.completed",
 	object: {
 		id: CHECKOUT_ID,
@@ -2591,11 +2594,11 @@ section("Refund webhook (PRD 16.5 — revocation is push, and never destructive)
  * and **no licence key**. An earlier version of these tests put the key in
  * `object.key`, a shape Creem does not produce, and so passed while revocation
  * was in fact dead code. The row is found through the order id recorded at
- * checkout (migration 0003), or it is not found at all.
+ * checkout (`purchases.order_ref`), or it is not found at all.
  */
 const refundFor = (order: string, checkout: string) =>
 	JSON.stringify({
-		id: "evt_e2e_refund",
+		id: `evt_e2e_refund_${order}_${CREEM_RUN}`,
 		eventType: "refund.created",
 		object: {
 			id: "ref_e2e",
@@ -2793,7 +2796,7 @@ const transient = await postNotice(appleNotice("REFUND", "u-transient"));
 check("an App Store outage answers 500 so Apple retries", transient.status === 500, JSON.stringify(transient.body));
 
 // ...and the retry has to get through. This is the assertion that proves the
-// dedupe keys on `process_status <> 'ok'` rather than on the row existing: a
+// dedupe keys on `status <> 'ok'` rather than on the row existing: a
 // plain INSERT OR IGNORE would call this a duplicate and lose the refund.
 appleState.mode = "ok";
 const retried = await postNotice(appleNotice("REFUND", "u-transient"));
@@ -2811,7 +2814,7 @@ check(
 	JSON.stringify(testNotice.body),
 );
 
-section("Operator console (migration 0010 — read, plus Pro by hand)");
+section("Operator console (read, plus Pro by hand)");
 /** The console's token, read from .dev.vars like the Creem and Apple ones. */
 function devAdminToken(): string {
 	try {
@@ -2919,6 +2922,43 @@ check(
 	(await api("/api/v1/licenses/status", { token })).body.tier === "pro",
 );
 
+// The other direction: a refund of one source must not downgrade a device that
+// another source still holds up. Every source is a row in the same table, and
+// the refund path asks for the device's whole tier rather than assuming.
+await asAdmin(`/devices/${mainRow.device_id}/grant`, {
+	method: "POST",
+	body: JSON.stringify({ note: "e2e — outlives an App Store refund" }),
+});
+appleState.revoked = true;
+const refundUnderGrant = await postNotice(appleNotice("REFUND", "u-refund-under-grant"));
+check(
+	"an App Store refund is applied to a device that also holds a grant",
+	refundUnderGrant.status === 200 && refundUnderGrant.body.applied === "revoked",
+	JSON.stringify(refundUnderGrant.body),
+);
+check(
+	"and the grant keeps it Pro",
+	(await api("/api/v1/licenses/status", { token })).body.tier === "pro",
+);
+const revokedLast = await asAdmin(`/devices/${mainRow.device_id}/revoke`, {
+	method: "POST",
+	body: JSON.stringify({ note: "e2e — nothing left underneath" }),
+});
+check(
+	"revoking the last remaining source returns the device to Free",
+	revokedLast.body.status === "free" &&
+		(await api("/api/v1/licenses/status", { token })).body.tier === "free",
+	JSON.stringify(revokedLast.body),
+);
+appleState.revoked = false;
+const reversedAfterGrant = await postNotice(appleNotice("REFUND_REVERSED", "u-reversed-after-grant"));
+check(
+	"and a reversed refund still restores Pro through the kept binding",
+	reversedAfterGrant.body.applied === "active" &&
+		(await api("/api/v1/licenses/status", { token })).body.tier === "pro",
+	JSON.stringify(reversedAfterGrant.body),
+);
+
 check(
 	"a grant for a device that does not exist is a 404",
 	(await asAdmin("/devices/no-such-device/grant", {
@@ -2929,9 +2969,11 @@ check(
 
 const adminBilling = await asAdmin("/billing");
 check(
-	"billing reports the grants it just made",
-	adminBilling.status === 200 && adminBilling.body.admin_grants.some((r: any) => r.status === "revoked"),
-	JSON.stringify(adminBilling.body.admin_grants),
+	"billing reports the grants it just made, beside what was sold",
+	adminBilling.status === 200 &&
+		adminBilling.body.purchases.some((r: any) => r.provider === "admin" && r.status === "revoked") &&
+		adminBilling.body.purchases.some((r: any) => r.provider === "apple"),
+	JSON.stringify(adminBilling.body.purchases),
 );
 
 appleStore.close();
