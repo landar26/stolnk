@@ -37,8 +37,8 @@ import { COMPANY_EN, COMPANY_ZH, SUPPORT_EMAIL } from "./contact.ts";
  * guessed at in the prose.
  */
 
-const UPDATED_EN = "10 September 2026";
-const UPDATED_ZH = "2026 年 9 月 10 日";
+const UPDATED_EN = "23 September 2026";
+const UPDATED_ZH = "2026 年 9 月 23 日";
 
 export const legalEn = {
 	privacy: {
@@ -150,6 +150,16 @@ export const legalEn = {
 								</td>
 							</tr>
 							<tr>
+								<th scope="row">
+									iPhone app: App Store transaction ids, product id, Sandbox or Production
+								</th>
+								<td>Confirming with Apple that a Pro purchase is real, and honouring a refund</td>
+								<td>
+									Performance of our contract with you, and our legal obligation to keep
+									transaction records. Kept while the purchase is valid
+								</td>
+							</tr>
+							<tr>
 								<th scope="row">IP address</th>
 								<td>Rate limiting, so one client cannot flood the service</td>
 								<td>
@@ -187,6 +197,37 @@ export const legalEn = {
 					<li>The folder on your Mac a file lands in. We are never told your local paths.</li>
 					<li>Anything on a Mac other than what its own app sends us.</li>
 				</ul>
+
+				<h2>The iPhone app</h2>
+				<p>
+					The iPhone app works the same way as the Mac app. There is no sign-in, no email and
+					no password: your identity is the name you choose and two keys generated on the
+					phone, kept in the Secure Enclave where the hardware has one. Files sent to one of
+					your addresses are decrypted on the phone and saved inside the app's own storage on
+					that iPhone. We never see them, and deleting the app deletes them.
+				</p>
+				<p>
+					A download link you create from the iPhone uploads that one file unencrypted, as
+					described in the table above, so that any browser can fetch it.
+				</p>
+				<p>
+					Pro is bought through the App Store. Apple processes the payment and we never see
+					your payment details or your Apple Account; the app sends us the transaction id so
+					our server can confirm the purchase with Apple.
+				</p>
+				<p>
+					The app has no advertising, no analytics SDK, no tracking and no App Tracking
+					Transparency prompt.
+				</p>
+				<p>
+					<strong>Deleting your account.</strong> In the app, go to Me → Delete account. It
+					takes effect immediately: your name is released, every address and download link
+					stops working, and every row the device owned on our side — inboxes, transfer
+					records, links and usage — is deleted, along with any file still waiting in the
+					relay and every download link's file. Files already on your iPhone stay there. The
+					App Store purchase record is kept, because the purchase belongs to your Apple
+					Account and Restore Purchases has to find it again.
+				</p>
 
 				<h2>The one hash we should point at</h2>
 				<p>
@@ -251,7 +292,9 @@ export const legalEn = {
 					</li>
 					<li>
 						<strong>Apple</strong> notarises the Mac app. That check happens between your
-						Mac and Apple; we are not part of it and are not told the outcome.
+						Mac and Apple; we are not part of it and are not told the outcome. Apple also
+						sells Pro in the iPhone app and is the merchant for those purchases; we receive
+						the transaction record and nothing about your payment.
 					</li>
 				</ul>
 				<p>
@@ -461,6 +504,12 @@ export const legalEn = {
 
 				<h2>Price, tax and payment</h2>
 				<p>
+					In the iPhone app, Pro is sold by Apple through the App Store. Apple's terms apply
+					to that payment, and refunds for it are requested from Apple at{" "}
+					<a href="https://reportaproblem.apple.com">reportaproblem.apple.com</a>. The rest of
+					this section is about purchases made on this website.
+				</p>
+				<p>
 					Creem is the merchant of record. Your contract of sale is with them as well as
 					this licence with us, their terms apply to the payment itself, and any VAT, GST or
 					sales tax is handled by them and may be added at checkout depending on where you
@@ -577,6 +626,63 @@ export const legalEn = {
 			</>
 		),
 	},
+	support: {
+		title: "Support",
+		updated: `Last updated ${UPDATED_EN}`,
+		lede: "Help with Stolnk on the Mac and on iPhone. One mailbox, read by a person.",
+		body: (
+			<>
+				<h2>Contact</h2>
+				<p>
+					Email <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>. Tell us your Stolnk
+					name and, for a purchase question, the order number or the date you bought it. We
+					answer by email, best-effort, usually within a few working days.
+				</p>
+
+				<h2>iPhone app</h2>
+				<ul>
+					<li>
+						<strong>Receiving files.</strong> Pick a name, then turn a folder in the app into
+						an address. Anyone can open that address in a browser and send you files — no app
+						or account on their side. Keep the app open or bring it back to the foreground to
+						collect waiting files.
+					</li>
+					<li>
+						<strong>Sending a file.</strong> In Files, share a file as a download link. You
+						choose how long it lasts and how many downloads it allows, and you can pause,
+						revoke or delete it at any time.
+					</li>
+					<li>
+						<strong>Pro and Restore Purchases.</strong> Pro is a one-time App Store purchase.
+						On a new iPhone or after registering again, open Me → Plan and tap Restore
+						Purchases. App Store refunds are requested from Apple at{" "}
+						<a href="https://reportaproblem.apple.com">reportaproblem.apple.com</a>.
+					</li>
+					<li>
+						<strong>Deleting your account.</strong> Me → Delete account. It releases your
+						name and deletes everything we hold for that device, immediately. What is removed
+						is listed in the <a href="/privacy">privacy policy</a>.
+					</li>
+				</ul>
+
+				<h2>Mac app</h2>
+				<p>
+					Download it from the <a href="/download">download page</a>. Licence and refund
+					questions for purchases made on this website go to the same address above.
+				</p>
+
+				<h2>Policies</h2>
+				<p>
+					<a href="/privacy">Privacy policy</a> · <a href="/terms">Terms of service</a>
+				</p>
+
+				<h2>Company</h2>
+				<p>
+					{COMPANY_EN} ({COMPANY_ZH}), Ningbo, People's Republic of China.
+				</p>
+			</>
+		),
+	},
 };
 
 export const legalZh: typeof legalEn = {
@@ -659,6 +765,11 @@ export const legalZh: typeof legalEn = {
 								</td>
 							</tr>
 							<tr>
+								<th scope="row">iPhone App：App Store 交易号、商品标识、沙盒或生产环境</th>
+								<td>向 Apple 核实 Pro 购买是否真实，以及处理退款</td>
+								<td>履行与你的合同，以及保存交易记录的法定义务。购买有效期间保留</td>
+							</tr>
+							<tr>
 								<th scope="row">IP 地址</th>
 								<td>限流，避免单个客户端把服务打满</td>
 								<td>基于我们维持服务可用的正当利益。在内存中保留约一分钟，我们不写入任何地方</td>
@@ -686,6 +797,19 @@ export const legalZh: typeof legalEn = {
 					<li>文件落在你 Mac 上的哪个文件夹。你的本地路径从来不会告诉我们。</li>
 					<li>Mac 上除了它自己的 App 主动发给我们的之外的任何东西。</li>
 				</ul>
+
+				<h2>iPhone App</h2>
+				<p>
+					iPhone App 与 Mac App 的工作方式相同。没有登录、没有邮箱、没有密码：你的身份就是你选的名字，加上在手机上生成的两把密钥，硬件支持时保存在安全隔区里。发到你地址的文件在手机上解密，保存在这台 iPhone 上该 App 自己的存储空间里。我们看不到它们；删除 App 即删除这些文件。
+				</p>
+				<p>从 iPhone 创建的下载链接会把那一个文件以明文上传（见上表），以便任何浏览器都能下载。</p>
+				<p>
+					Pro 通过 App Store 购买。由 Apple 处理支付，我们看不到你的支付信息和 Apple 账户；App 只把交易号发给我们，服务器据此向 Apple 核实这笔购买。
+				</p>
+				<p>App 中没有广告、没有统计 SDK、没有追踪，也没有 App 跟踪透明度弹窗。</p>
+				<p>
+					<strong>删除账号。</strong>在 App 中进入「我的 → 删除账号」，立即生效：你的名字被释放，所有地址和下载链接失效，这台设备在我们这边拥有的全部记录——收件箱、传输记录、链接与用量——都会被删除，仍在中转中等待的文件和所有下载链接的文件也一并删除。已经在你 iPhone 上的文件会保留。App Store 购买记录会保留，因为这笔购买属于你的 Apple 账户，「恢复购买」需要能再次找到它。
+				</p>
 
 				<h2>有一个哈希我们要单独点出来</h2>
 				<p>
@@ -727,7 +851,7 @@ export const legalZh: typeof legalEn = {
 						<strong>Creem</strong> 处理支付并签发授权码，是每一笔购买的记录商户。你的支付信息进的是它那里，永远不会到我们这里。
 					</li>
 					<li>
-						<strong>Apple</strong> 为 Mac App 做公证。这个校验发生在你的 Mac 和 Apple 之间，我们不参与，也不会被告知结果。
+						<strong>Apple</strong> 为 Mac App 做公证。这个校验发生在你的 Mac 和 Apple 之间，我们不参与，也不会被告知结果。iPhone App 中的 Pro 也由 Apple 通过 App Store 销售，Apple 是这些购买的商户；我们只收到交易记录，不接触任何支付信息。
 					</li>
 				</ul>
 				<p>
@@ -866,6 +990,10 @@ export const legalZh: typeof legalEn = {
 
 				<h2>价格、税费与支付</h2>
 				<p>
+					在 iPhone App 中，Pro 由 Apple 通过 App Store 销售。该笔支付适用 Apple 的条款，退款请向 Apple 申请：
+					<a href="https://reportaproblem.apple.com">reportaproblem.apple.com</a>。本节其余内容适用于在本网站完成的购买。
+				</p>
+				<p>
 					Creem 是记录商户。你的买卖合同同时是与它订立的，本许可才是与我们订立的；支付本身适用它们的条款，增值税、商品服务税或销售税由它们处理，并可能在结账时按你所在地加收。
 				</p>
 				<p>我们可能随时调整新购买的价格。这不会改变你已经买到的东西。</p>
@@ -934,6 +1062,49 @@ export const legalZh: typeof legalEn = {
 				<p>
 					{COMPANY_ZH} · <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>
 				</p>
+			</>
+		),
+	},
+	support: {
+		title: "支持",
+		updated: `最后更新于 ${UPDATED_ZH}`,
+		lede: "Stolnk Mac 版与 iPhone 版的帮助。只有一个邮箱，由真人阅读。",
+		body: (
+			<>
+				<h2>联系我们</h2>
+				<p>
+					发邮件到 <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>。请附上你的 Stolnk 名字；购买相关的问题请附上订单号或购买日期。我们通过邮件尽力答复，通常在几个工作日内。
+				</p>
+
+				<h2>iPhone App</h2>
+				<ul>
+					<li>
+						<strong>接收文件。</strong>先选一个名字，再在 App 里把一个文件夹变成收件地址。任何人在浏览器里打开这个地址就能给你发文件——对方无需安装 App，也无需注册。保持 App 打开或回到前台即可取回等待中的文件。
+					</li>
+					<li>
+						<strong>发送文件。</strong>在「文件」里把一个文件分享为下载链接，可以设置有效期和下载次数，并可随时暂停、撤回或删除。
+					</li>
+					<li>
+						<strong>Pro 与恢复购买。</strong>Pro 是一次性的 App Store 购买。换了新 iPhone 或重新注册后，进入「我的 → 套餐」点「恢复购买」。App Store 的退款请向 Apple 申请：
+						<a href="https://reportaproblem.apple.com">reportaproblem.apple.com</a>。
+					</li>
+					<li>
+						<strong>删除账号。</strong>「我的 → 删除账号」。立即释放你的名字，并删除我们为这台设备保存的全部数据，删除范围见<a href="/privacy">隐私政策</a>。
+					</li>
+				</ul>
+
+				<h2>Mac App</h2>
+				<p>
+					在<a href="/download">下载页</a>获取。在本网站购买的授权与退款问题，同样发到上面的邮箱。
+				</p>
+
+				<h2>政策</h2>
+				<p>
+					<a href="/privacy">隐私政策</a> · <a href="/terms">服务条款</a>
+				</p>
+
+				<h2>公司</h2>
+				<p>{COMPANY_ZH}（{COMPANY_EN}），中国宁波。</p>
 			</>
 		),
 	},

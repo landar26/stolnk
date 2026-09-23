@@ -27,6 +27,7 @@ import {
 	type InboxRow,
 } from "../lib/inbox";
 import { enforce } from "../lib/ratelimit";
+import { deleteShare, type ShareRow } from "../lib/share";
 import { inboxUrl } from "../lib/site";
 import { present } from "./inboxes";
 
@@ -222,6 +223,57 @@ devices.get("/me", async (c) => {
 		name,
 		inboxes: results.map((row) => present(name, row)),
 	});
+});
+
+/**
+ * Account deletion (App Store 5.1.1(v)). The device *is* the account — the name
+ * was claimed by it and nothing else — so deleting the device is deleting the
+ * account.
+ *
+ * Objects go first, rows second. R2 has no cascade: a file still parked in the
+ * relay or a share's plaintext would outlive the row that pointed at it, and
+ * with the row gone no sweep could ever find it again. The single DELETE then
+ * cascades to inboxes, transfers, files, shares, challenges, monthly usage and
+ * purchase bindings, and the name goes straight back into the pool.
+ *
+ * Purchases themselves are kept. An App Store purchase belongs to the Apple
+ * account, not to this device, and Restore on a new registration must still
+ * find it; the row carries no personal data beyond Apple's transaction id.
+ */
+devices.delete("/me", async (c) => {
+	const deviceId = await requireDevice(c.env, c.req.raw);
+	if (!(await deviceName(c.env, deviceId))) return unknownDevice();
+
+	const { results: parked } = await c.env.DB.prepare(
+		`SELECT f.r2_key, f.upload_id
+		 FROM files f
+		 JOIN transfers t ON t.transfer_id = f.transfer_id
+		 JOIN inboxes i ON i.inbox_id = t.inbox_id
+		 WHERE i.owner_device_id = ? AND f.state IN ('uploading', 'ready')`,
+	)
+		.bind(deviceId)
+		.all<{ r2_key: string; upload_id: string | null }>();
+	for (const file of parked) {
+		try {
+			if (file.upload_id) {
+				await c.env.RELAY.resumeMultipartUpload(file.r2_key, file.upload_id).abort();
+			} else {
+				await c.env.RELAY.delete(file.r2_key);
+			}
+		} catch {
+			// Object already gone.
+		}
+	}
+
+	const { results: owned } = await c.env.DB.prepare(
+		"SELECT * FROM shares WHERE owner_device_id = ?",
+	)
+		.bind(deviceId)
+		.all<ShareRow>();
+	for (const share of owned) await deleteShare(c.env, share);
+
+	await c.env.DB.prepare("DELETE FROM devices WHERE device_id = ?").bind(deviceId).run();
+	return c.json({ deleted: true });
 });
 
 /**

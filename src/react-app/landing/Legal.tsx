@@ -8,7 +8,7 @@ import { useLang } from "./lang-context.ts";
  * The date is above the fold rather than in the footer on purpose — it is the
  * first thing anyone checking whether a policy is current looks for.
  */
-export function Legal({ document }: { document: "privacy" | "terms" }) {
+export function Legal({ document }: { document: "privacy" | "terms" | "support" }) {
 	const { t } = useLang();
 	const copy = t.legal[document];
 

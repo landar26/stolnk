@@ -65,6 +65,7 @@ function Page({ path }: { path: string }) {
 	if (path === "compare") return <Compare />;
 	if (path === "privacy") return <Legal document="privacy" />;
 	if (path === "terms") return <Legal document="terms" />;
+	if (path === "support") return <Legal document="support" />;
 	// Creem's return URL after checkout, and only reachable that way.
 	if (path === "thanks") return <Thanks />;
 	return <NotFound />;
