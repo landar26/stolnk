@@ -193,15 +193,10 @@ export async function sendFileOverLan(
 	const hasher = sha256.create();
 	let sent = 0;
 
-	for (let index = 0; index < totalChunks; index++) {
-		options.signal?.throwIfAborted();
-		assertOpen(channel);
-
+	const prepare = async (index: number) => {
 		const start = index * CHUNK_SIZE;
 		const slice = file.slice(start, Math.min(file.size, start + CHUNK_SIZE));
 		const plaintext = new Uint8Array(await slice.arrayBuffer());
-		hasher.update(plaintext);
-
 		const ciphertext = await encryptChunk(contentKey, {
 			noncePrefix,
 			fileIdBytes: idBytes,
@@ -209,6 +204,25 @@ export async function sendFileOverLan(
 			total: totalChunks,
 			plaintext,
 		});
+		return { plaintext, ciphertext };
+	};
+
+	// One chunk is always being read and encrypted while the previous one goes
+	// out, so the channel is never waiting on the disk or on WebCrypto.
+	let next = prepare(0);
+	for (let index = 0; index < totalChunks; index++) {
+		options.signal?.throwIfAborted();
+		assertOpen(channel);
+
+		const { plaintext, ciphertext } = await next;
+		if (index + 1 < totalChunks) {
+			next = prepare(index + 1);
+			// Observed later by the `await` above; this only stops an abandoned
+			// prefetch from surfacing as an unhandled rejection.
+			next.catch(() => {});
+		}
+		// In order, because the digest is over the plaintext stream.
+		hasher.update(plaintext);
 
 		for (let offset = 0; offset < ciphertext.length; offset += FRAME_SIZE) {
 			await drain(channel);

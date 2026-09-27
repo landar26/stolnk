@@ -38,15 +38,25 @@ export interface UploadCallbacks {
 }
 
 /**
+ * How many parts may be on the wire at once.
+ *
+ * One request at a time leaves the pipe idle while the next part is read and
+ * encrypted, and a single TCP stream rarely fills a fast uplink anyway. Three
+ * overlaps both without much memory: the R2 multipart upload takes parts in
+ * any order, and the Worker records each one independently.
+ */
+const PARALLEL_PARTS = 3;
+
+/**
  * Encrypts and uploads one file.
  *
  * Memory is bounded regardless of file size (PRD 9.2): the file is read through
- * `File.slice()` a chunk at a time, and at most one 64 MiB part is held before
- * being handed to `fetch` as a Blob.
+ * `File.slice()` a chunk at a time, and at most `PARALLEL_PARTS` 64 MiB parts
+ * are in flight, plus the one being assembled.
  *
- * The part has to be materialised rather than streamed because Safari does not
+ * Parts have to be materialised rather than streamed because Safari does not
  * support request bodies backed by a ReadableStream, so a 20 GB file still only
- * ever costs ~64 MiB of memory.
+ * ever costs ~256 MiB of memory.
  */
 export async function uploadFile(
 	file: File,
@@ -142,6 +152,20 @@ export async function uploadFile(
 	let pendingBytes = 0;
 	let sent = 0;
 
+	// One failed part stops the rest: they share this controller, and the first
+	// error is the one reported.
+	const abort = new AbortController();
+	const onOuterAbort = () => abort.abort(options.signal?.reason);
+	options.signal?.addEventListener("abort", onOuterAbort);
+	const inFlight = new Set<Promise<void>>();
+	// Widened by hand: it is set from inside the upload callbacks, which TS cannot see.
+	let failure = null as { error: unknown } | null;
+
+	const partDone = (size: number) => {
+		sent = Math.min(file.size, sent + size);
+		report({ fileId, sent, phase: "uploading" });
+	};
+
 	const flush = async (): Promise<void> => {
 		if (pendingBytes === 0) return;
 		const current = partNumber;
@@ -150,43 +174,67 @@ export async function uploadFile(
 		pendingBytes = 0;
 		partNumber += 1;
 
-		if (!completedParts.has(current)) {
-			await uploadPart(transferId, fileId, current, token, blob, options.signal);
+		if (completedParts.has(current)) {
+			partDone(blob.size);
+			return;
 		}
-		sent = Math.min(file.size, sent + blob.size);
-		report({ fileId, sent, phase: "uploading" });
+
+		while (inFlight.size >= PARALLEL_PARTS) await Promise.race(inFlight);
+		if (failure) throw failure.error;
+
+		const upload: Promise<void> = uploadPart(transferId, fileId, current, token, blob, abort.signal)
+			.then(
+				() => partDone(blob.size),
+				(error: unknown) => {
+					failure ??= { error };
+					abort.abort();
+				},
+			)
+			.finally(() => inFlight.delete(upload));
+		inFlight.add(upload);
 	};
 
-	for (let index = 0; index < totalChunks; index++) {
-		options.signal?.throwIfAborted();
+	try {
+		for (let index = 0; index < totalChunks; index++) {
+			options.signal?.throwIfAborted();
+			if (failure) throw failure.error;
 
-		const start = index * CHUNK_SIZE;
-		const slice = file.slice(start, Math.min(file.size, start + CHUNK_SIZE));
-		const plaintext = new Uint8Array(await slice.arrayBuffer());
-		hasher.update(plaintext);
+			const start = index * CHUNK_SIZE;
+			const slice = file.slice(start, Math.min(file.size, start + CHUNK_SIZE));
+			const plaintext = new Uint8Array(await slice.arrayBuffer());
+			hasher.update(plaintext);
 
-		const ciphertext = await encryptChunk(contentKey, {
-			noncePrefix,
-			fileIdBytes: idBytes,
-			index,
-			total: totalChunks,
-			plaintext,
-		});
+			const ciphertext = await encryptChunk(contentKey, {
+				noncePrefix,
+				fileIdBytes: idBytes,
+				index,
+				total: totalChunks,
+				plaintext,
+			});
 
-		// A chunk straddling a part boundary is split; parts are byte ranges of
-		// the ciphertext stream and have no relationship to chunk boundaries.
-		let offset = 0;
-		while (offset < ciphertext.length) {
-			const room = partSize - pendingBytes;
-			const take = Math.min(room, ciphertext.length - offset);
-			pending.push(ciphertext.subarray(offset, offset + take));
-			pendingBytes += take;
-			offset += take;
-			if (pendingBytes === partSize) await flush();
+			// A chunk straddling a part boundary is split; parts are byte ranges of
+			// the ciphertext stream and have no relationship to chunk boundaries.
+			let offset = 0;
+			while (offset < ciphertext.length) {
+				const room = partSize - pendingBytes;
+				const take = Math.min(room, ciphertext.length - offset);
+				pending.push(ciphertext.subarray(offset, offset + take));
+				pendingBytes += take;
+				offset += take;
+				if (pendingBytes === partSize) await flush();
+			}
 		}
+		await flush();
+		await Promise.all(inFlight);
+		if (failure) throw failure.error;
+	} catch (error) {
+		abort.abort();
+		await Promise.allSettled(inFlight);
+		throw failure ? failure.error : error;
+	} finally {
+		options.signal?.removeEventListener("abort", onOuterAbort);
 	}
 
-	await flush();
 	await completeFile(transferId, fileId, token, toHex(hasher.digest()));
 	await clearResume(fileId);
 

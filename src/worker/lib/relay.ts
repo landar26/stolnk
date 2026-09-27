@@ -85,6 +85,9 @@ export async function openTransfer(
 		/** PRD 8.2 — "lan" skips the relay entirely. See the note below on why
 		 *  this one is safe to take from the client. */
 		transport?: "relay" | "lan";
+		/** When present, the owner's device is told a file is on its way the
+		 *  moment it is booked — see `announceIncoming`. */
+		ctx?: { waitUntil(promise: Promise<unknown>): void };
 	},
 ): Promise<OpenedTransfer> {
 	const { inbox, planned } = options;
@@ -283,7 +286,69 @@ export async function openTransfer(
 		transport,
 	});
 
+	if (transport === "relay" && options.ctx) {
+		announceIncoming(env, options.ctx, inbox, transferId, planned);
+	}
+
 	return { transferId, token, expiresAt, createdAt: now, files: created };
+}
+
+/**
+ * Tells the owner's device that a file has started uploading, so it can show a
+ * placeholder while the sender is still pushing parts rather than only once
+ * `finishFile` says it is ready.
+ *
+ * Carries just enough of the envelope to decrypt the *name* — never
+ * `nonce_prefix` or a digest. The device must not start pulling ciphertext
+ * before the file is complete, and without those it has nothing to pull with.
+ * Relay only: a LAN transfer is announced by its own DataChannel.
+ */
+function announceIncoming(
+	env: Env,
+	ctx: { waitUntil(promise: Promise<unknown>): void },
+	inbox: InboxRow,
+	transferId: string,
+	planned: PlannedFile[],
+): void {
+	pushInBackground(ctx, async () => {
+		const hub = hubFor(env, inbox.owner_device_id);
+		for (const file of planned) {
+			await hub.notifyDevice({
+				type: "file.incoming",
+				file_id: file.file_id,
+				transfer_id: transferId,
+				inbox_id: inbox.inbox_id,
+				inbox_name: inbox.display_name,
+				enc_name: file.enc_name,
+				name_iv: file.name_iv,
+				wrapped_key: file.wrapped_key,
+				key_iv: file.key_iv,
+				eph_pub: file.eph_pub,
+				size: file.size,
+				cipher_size: file.cipher_size,
+				uploaded: 0,
+			});
+		}
+	});
+}
+
+/**
+ * The owner's device is told these files will never arrive, so their
+ * placeholders go away. Awaited rather than backgrounded: both callers (an
+ * abort and the cron sweep) are already off the sender's critical path.
+ */
+export async function announceCancelled(
+	env: Env,
+	deviceId: string,
+	fileIds: string[],
+): Promise<void> {
+	if (fileIds.length === 0) return;
+	try {
+		const hub = hubFor(env, deviceId);
+		for (const fileId of fileIds) await hub.notifyDevice({ type: "file.cancelled", file_id: fileId });
+	} catch {
+		// The socket is an optimisation; `/incoming` is the truth on next launch.
+	}
 }
 
 /**
@@ -464,4 +529,17 @@ export async function abandonTransfer(env: Env, transferId: string): Promise<voi
 		writes.push(refundRelayBytes(env, owner.device_id, undelivered, utcMonth(owner.created_at)));
 	}
 	await env.DB.batch(writes);
+
+	// LAN too: the send page abandons a DataChannel transfer by stopping and
+	// calling abort, without closing the channel, so this push is the only way
+	// the device learns to drop its half-written file.
+	if (owner) {
+		await announceCancelled(
+			env,
+			owner.device_id,
+			results
+				.filter((file) => file.state === "uploading" || file.state === "ready")
+				.map((file) => file.file_id),
+		);
+	}
 }

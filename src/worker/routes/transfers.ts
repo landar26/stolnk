@@ -10,6 +10,7 @@ import {
 	partCountFor,
 } from "../limits";
 import { randomId } from "../lib/bytes";
+import { hubFor, pushInBackground } from "../lib/deviceauth";
 import {
 	abandonTransfer,
 	finishFile,
@@ -132,6 +133,7 @@ transfers.post("/", async (c) => {
 		// PRD 8.2 — anything but the exact string is the relay. `openTransfer`
 		// explains why taking this from the client cannot buy free relay bytes.
 		transport: body.transport === "lan" ? "lan" : "relay",
+		ctx: c.executionCtx,
 	});
 
 	return c.json(
@@ -160,7 +162,7 @@ transfers.put("/:tid/files/:fid/parts/:n", async (c) => {
 	enforce(`part:${clientIp(c)}`, RATE_MAX_PARTS);
 
 	const transferId = c.req.param("tid");
-	await authoriseUpload(c, transferId);
+	const upload = await authoriseUpload(c, transferId);
 	const fileId = c.req.param("fid");
 	const partNumber = Number(c.req.param("n"));
 	if (!Number.isInteger(partNumber) || partNumber < 1 || partNumber > 10_000) {
@@ -203,14 +205,34 @@ transfers.put("/:tid/files/:fid/parts/:n", async (c) => {
 	const body = c.req.raw.body;
 	if (!body) return badRequest("Empty body.");
 
-	const upload = c.env.RELAY.resumeMultipartUpload(file.r2_key, file.upload_id);
-	const part = await upload.uploadPart(partNumber, body);
+	const multipart = c.env.RELAY.resumeMultipartUpload(file.r2_key, file.upload_id);
+	const part = await multipart.uploadPart(partNumber, body);
 
 	await c.env.DB.prepare(
 		"INSERT OR REPLACE INTO file_parts (file_id, part_number, etag, size) VALUES (?, ?, ?, ?)",
 	)
 		.bind(fileId, partNumber, part.etag, expected)
 		.run();
+
+	// The device's placeholder moves one part at a time. One push per 64 MiB is
+	// the whole cost (PRD 8.6 #1): the browser has no finer figure to give, and
+	// every message wakes the Durable Object.
+	pushInBackground(c.executionCtx, async () => {
+		const row = await c.env.DB.prepare(
+			`SELECT i.owner_device_id AS device_id,
+			        (SELECT ifnull(sum(size), 0) FROM file_parts WHERE file_id = ?) AS uploaded
+			 FROM inboxes i WHERE i.inbox_id = ?`,
+		)
+			.bind(fileId, upload.inbox)
+			.first<{ device_id: string; uploaded: number }>();
+		if (!row) return;
+		await hubFor(c.env, row.device_id).notifyDevice({
+			type: "file.progress",
+			file_id: fileId,
+			uploaded: row.uploaded,
+			cipher_size: file.cipher_size,
+		});
+	});
 
 	return c.json({ part_number: partNumber, etag: part.etag, skipped: false });
 });

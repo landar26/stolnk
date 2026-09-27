@@ -348,6 +348,7 @@ async function readAndRelay(
 		// forge, and PRD 15.1's signal must not be settable by a stranger.
 		senderIsOwner: false,
 		via: "curl",
+		ctx: c.executionCtx,
 	});
 	const target = opened.files[0];
 	// The curl path is always the relay (it is the path that exists *because*

@@ -99,6 +99,48 @@ delivery.get("/pending", async (c) => {
 });
 
 /**
+ * Relay files still being uploaded by their sender — the placeholders a
+ * device shows before `file.ready`. The push (`file.incoming` / `file.progress`)
+ * is the fast path; this is what a device that was asleep or closed catches up
+ * from.
+ *
+ * The same name-only envelope as the push: no `nonce_prefix`, no digest, so
+ * this cannot become a way to start on a relay file before it is complete.
+ */
+delivery.get("/incoming", async (c) => {
+	const deviceId = await requireDevice(c.env, c.req.raw);
+	const { results } = await c.env.DB.prepare(
+		`SELECT f.file_id, f.transfer_id, t.inbox_id, i.display_name AS inbox_name,
+		        f.enc_name, f.name_iv, f.size, f.cipher_size,
+		        f.wrapped_key, f.key_iv, f.eph_pub,
+		        (SELECT ifnull(sum(p.size), 0) FROM file_parts p WHERE p.file_id = f.file_id) AS uploaded
+		 FROM files f
+		 JOIN transfers t ON t.transfer_id = f.transfer_id
+		 JOIN inboxes i ON i.inbox_id = t.inbox_id
+		 WHERE i.owner_device_id = ? AND f.state = 'uploading'
+		   AND t.transport = 'relay' AND t.expires_at > ?
+		 ORDER BY f.created_at ASC`,
+	)
+		.bind(deviceId, Date.now())
+		.all<{
+			file_id: string;
+			transfer_id: string;
+			inbox_id: string;
+			inbox_name: string;
+			enc_name: string;
+			name_iv: string;
+			size: number;
+			cipher_size: number;
+			wrapped_key: string;
+			key_iv: string;
+			eph_pub: string;
+			uploaded: number;
+		}>();
+
+	return c.json({ files: results });
+});
+
+/**
  * PRD 8.2 — the metadata for one file that is about to arrive over a LAN
  * DataChannel, rather than out of R2.
  *

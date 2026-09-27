@@ -11,6 +11,7 @@ import {
 	UPLOAD_TOKEN_TTL_MS,
 } from "./limits";
 import { transferExpired } from "./lib/metrics";
+import { announceCancelled } from "./lib/relay";
 import { isInboxHost, rewriteInboxPreview } from "./lib/preview";
 import { verifyToken, type DeviceToken, type SignalToken, type UploadToken } from "./lib/tokens";
 import { requireAdmin } from "./lib/admin";
@@ -354,6 +355,7 @@ async function sweep(env: Env): Promise<void> {
 		}
 		await env.DB.batch(writes);
 		transferExpired({ inbox_id: file.inbox_id, bytes: file.size });
+		await announceCancelled(env, file.owner_device_id, [file.file_id]);
 	}
 
 	await env.DB.prepare(
