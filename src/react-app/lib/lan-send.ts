@@ -56,6 +56,20 @@ const CONFIRM_TIMEOUT_MS = 30_000;
 
 export class LanTransferError extends Error {}
 
+/**
+ * `?lan-debug` logs where a direct transfer spent its time; `?lan-debug=serial`
+ * also turns the read-ahead off, so the two can be compared on the same network
+ * with the same file. Diagnostics only: nothing about the bytes changes.
+ */
+function readLanDebug(): { serial: boolean } | null {
+	try {
+		const value = new URLSearchParams(location.search).get("lan-debug");
+		return value === null ? null : { serial: value === "serial" };
+	} catch {
+		return null;
+	}
+}
+
 function assertOpen(channel: RTCDataChannel): void {
 	if (channel.readyState !== "open") {
 		throw new LanTransferError("The direct connection dropped.");
@@ -207,15 +221,20 @@ export async function sendFileOverLan(
 		return { plaintext, ciphertext };
 	};
 
+	const debug = readLanDebug();
+	const timing = { prepareMs: 0, drainMs: 0, confirmMs: 0, startedAt: performance.now() };
+
 	// One chunk is always being read and encrypted while the previous one goes
 	// out, so the channel is never waiting on the disk or on WebCrypto.
-	let next = prepare(0);
+	let next = debug?.serial ? null : prepare(0);
 	for (let index = 0; index < totalChunks; index++) {
 		options.signal?.throwIfAborted();
 		assertOpen(channel);
 
-		const { plaintext, ciphertext } = await next;
-		if (index + 1 < totalChunks) {
+		const waitedFrom = performance.now();
+		const { plaintext, ciphertext } = await (next ?? prepare(index));
+		timing.prepareMs += performance.now() - waitedFrom;
+		if (next && index + 1 < totalChunks) {
 			next = prepare(index + 1);
 			// Observed later by the `await` above; this only stops an abandoned
 			// prefetch from surfacing as an unhandled rejection.
@@ -225,7 +244,9 @@ export async function sendFileOverLan(
 		hasher.update(plaintext);
 
 		for (let offset = 0; offset < ciphertext.length; offset += FRAME_SIZE) {
+			const drainFrom = performance.now();
 			await drain(channel);
+			timing.drainMs += performance.now() - drainFrom;
 			// A copy, not a subarray view: `send` takes the underlying buffer, and a
 			// view onto the chunk would hand it the whole chunk every time.
 			channel.send(ciphertext.slice(offset, Math.min(ciphertext.length, offset + FRAME_SIZE)));
@@ -244,7 +265,27 @@ export async function sendFileOverLan(
 	assertOpen(channel);
 	channel.send(JSON.stringify({ type: "file.end", file_id: fileId, plain_sha256: toHex(hasher.digest()) }));
 
+	const confirmFrom = performance.now();
 	await settled;
+	timing.confirmMs = performance.now() - confirmFrom;
+
+	if (debug) {
+		const totalMs = performance.now() - timing.startedAt;
+		const round = (ms: number) => Math.round(ms);
+		console.info("[lan-debug]", {
+			mode: debug.serial ? "serial" : "read-ahead",
+			mib: +(file.size / 2 ** 20).toFixed(1),
+			totalMs: round(totalMs),
+			mibPerSec: +(file.size / 2 ** 20 / (totalMs / 1000)).toFixed(1),
+			// Waiting on the disk and WebCrypto: the sender is the bottleneck.
+			prepareMs: round(timing.prepareMs),
+			// Waiting on the network or the Mac to take what was already sent.
+			drainMs: round(timing.drainMs),
+			// After the last byte: the Mac finishing, verifying and landing it.
+			confirmMs: round(timing.confirmMs),
+		});
+	}
+
 	report(file.size, "done");
 	return { transferId, token, fileId };
 }
