@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { PRO_SEATS, RATE_MAX_LICENSE } from "../limits";
 import { activate, deactivate, keyHash, CreemError } from "../lib/creem";
-import { AppleStoreError, transactionInfo } from "../lib/apple-store";
+import { APPLE_PAID_APP_PRODUCT_ID, AppleStoreError, transactionInfo } from "../lib/apple-store";
 import { attachDevice, isProUnlock, recordApplePurchase } from "../lib/apple-purchase";
 import { requireDevice } from "../lib/deviceauth";
 import { planFor } from "../lib/entitlement";
@@ -90,6 +90,32 @@ licenses.post("/apple/verify", async (c) => {
 	}
 
 	await attachDevice(c.env, deviceId, purchaseId, now);
+	await reconcileDevice(c.env, deviceId);
+	return c.json(await planFor(c.env, deviceId));
+});
+
+/**
+ * The iOS app is a paid download: installing it is the purchase, so there is
+ * nothing to look up at Apple and the device is unlocked on its own say-so.
+ * This is a deliberate trade — any client holding a device key can call it.
+ *
+ * Keyed per device, like an admin grant, so a single abuser can be revoked with
+ * `setStatus` without touching anyone else. It never unbinds an older in-app
+ * purchase: that binding still answers refunds through the Apple webhook.
+ * Idempotent — a second call lands on the same row.
+ */
+licenses.post("/apple/app", async (c) => {
+	enforce(`license:${clientIp(c)}`, RATE_MAX_LICENSE);
+	const deviceId = await requireDevice(c.env, c.req.raw);
+	const now = Date.now();
+	const purchaseId = await upsertPurchase(c.env, "apple", `app:${deviceId}`, {
+		status: "active",
+		productId: APPLE_PAID_APP_PRODUCT_ID,
+		note: "paid-app download",
+		purchasedAt: now,
+		verifiedAt: now,
+	});
+	await bindDevice(c.env, purchaseId, deviceId, now);
 	await reconcileDevice(c.env, deviceId);
 	return c.json(await planFor(c.env, deviceId));
 });

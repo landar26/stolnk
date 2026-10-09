@@ -2814,6 +2814,22 @@ check(
 	JSON.stringify(testNotice.body),
 );
 
+// The paid-download unlock: no transaction, no call to Apple. A fresh phone
+// claims it on its own say-so and is Pro; claiming again changes nothing.
+const paidPhone = await makeDevice();
+const paidToken = (await register(`e2e-pa-${Math.random().toString(36).slice(2, 8)}`, paidPhone)).body.token as string;
+check("a fresh phone starts Free", (await api("/api/v1/licenses/status", { token: paidToken })).body.tier === "free");
+appleState.mode = "down";
+const paidClaim = await api("/api/v1/licenses/apple/app", { token: paidToken, method: "POST" });
+check(
+	"a paid-download claim makes the device Pro without asking Apple",
+	paidClaim.status === 200 && paidClaim.body.tier === "pro",
+	JSON.stringify(paidClaim.body),
+);
+appleState.mode = "ok";
+const paidAgain = await api("/api/v1/licenses/apple/app", { token: paidToken, method: "POST" });
+check("claiming again is idempotent", paidAgain.status === 200 && paidAgain.body.tier === "pro", JSON.stringify(paidAgain.body));
+
 section("Operator console (read, plus Pro by hand)");
 /** The console's token, read from .dev.vars like the Creem and Apple ones. */
 function devAdminToken(): string {

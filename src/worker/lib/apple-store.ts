@@ -3,6 +3,8 @@ const SANDBOX = "https://api.storekit-sandbox.apple.com";
 
 export const APPLE_BUNDLE_ID = "com.nbtxy.filego";
 export const APPLE_PRO_PRODUCT_ID = "com.nbtxy.filego.pro.lifetime";
+/** Not a StoreKit product: the label stored on a paid-download unlock (`/licenses/apple/app`). */
+export const APPLE_PAID_APP_PRODUCT_ID = "com.nbtxy.filego.app";
 
 export interface AppleTransaction {
 	transactionId: string;
