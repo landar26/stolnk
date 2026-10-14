@@ -1286,6 +1286,11 @@ a.button.large {
 	background: var(--accent-soft);
 }
 
+/* One plan, so one card at a readable width rather than a stretched one. */
+.plans.single {
+	grid-template-columns: minmax(0, 420px);
+}
+
 .plan h2,
 .plan h3 {
 	margin: 0;

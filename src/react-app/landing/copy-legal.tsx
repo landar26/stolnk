@@ -1,50 +1,42 @@
 import { COMPANY_EN, COMPANY_ZH, SUPPORT_EMAIL } from "./contact.ts";
 
 /**
- * The privacy policy and the terms of service.
+ * The privacy policy, the terms of service and the support page.
  *
- * These are the two pages on the site that are *operative* rather than
+ * These are the pages on the site that are *operative* rather than
  * persuasive: what the privacy policy says we store is a promise about the
  * schema in `migrations/`, and what the terms say is included is a promise
- * about `lib/entitlement.ts`. Both were written by reading those files, and
- * both have to be re-read when either changes.
+ * about `worker/limits.ts`. Both were written by reading those files, and both
+ * have to be re-read when either changes.
  *
- * Four places where that produced a less comfortable sentence than the
- * boilerplate would have:
+ * Stolnk is an iPhone app only, sold as a paid download on the App Store.
+ * Nothing is sold on this website, and the policy and terms say so. Four places
+ * where the facts produced a less comfortable sentence than boilerplate would:
  *
- *  1. **Metadata rows outlive the file, but no longer indefinitely.** The R2
- *     object is deleted on ACK, and PRD 8.5 makes a lot of that — correctly.
- *     The `files` row used to survive until the inbox did, which is what an
- *     earlier draft of this policy had to admit. `TRANSFER_RECORD_TTL_MS` in
- *     `worker/limits.ts` is now the period stated below, and the number here
- *     and the number there have to move together.
- *  2. **`files.plain_sha256` is a hash of the plaintext.** The Mac needs it to
- *     verify what it decrypted. It is nonetheless a content hash, and
- *     `migrations/0001_init.sql` now records that divergence from PRD 7.3
- *     openly. The policy describes what the code does.
+ *  1. **Metadata rows outlive the file, but not indefinitely.** The R2 object
+ *     is deleted on ACK; the `files` row lasts `TRANSFER_RECORD_TTL_MS` in
+ *     `worker/limits.ts`, and the number here and there move together.
+ *  2. **`files.plain_sha256` is a hash of the plaintext.** The phone needs it
+ *     to verify what it decrypted. It is nonetheless a content hash.
  *  3. **The sender session id is a pseudonymous identifier.** Random and
- *     per-tab, but stored against transfers and remembered senders, so it is
- *     disclosed rather than filed under "technical necessity".
- *  4. **Everything is processed outside mainland China.** Cloudflare and Creem
- *     both are. For a PRC-registered controller that is a cross-border transfer
- *     with its own notice and consent requirements, so it gets its own section
- *     instead of a line in a vendor list.
+ *     per-tab, but stored against transfers and remembered senders.
+ *  4. **Everything is processed outside mainland China.** Cloudflare is. For a
+ *     PRC-registered controller that is a cross-border transfer with its own
+ *     notice and consent requirements, so it gets its own section.
  *
- * NOT LEGAL ADVICE, and not reviewed by a qualified lawyer. The clauses that
- * depend on facts only the operator can confirm — registered address, VAT and
- * tax registration, whether an EU Article 27 representative has been appointed
- * — are marked in the review notes that accompany this file rather than
- * guessed at in the prose.
+ * NOT LEGAL ADVICE, and not reviewed by a qualified lawyer.
  */
 
-const UPDATED_EN = "23 September 2026";
-const UPDATED_ZH = "2026 年 9 月 23 日";
+const UPDATED_EN = "14 October 2026";
+const UPDATED_ZH = "2026 年 10 月 14 日";
+
+const REPORT_A_PROBLEM = "https://reportaproblem.apple.com";
 
 export const legalEn = {
 	privacy: {
 		title: "Privacy",
 		updated: `Last updated ${UPDATED_EN}`,
-		lede: "What Stolnk stores, what it cannot read, where it goes and how long each of those lasts. It is written against the actual database schema rather than around it.",
+		lede: "What Stolnk stores, what it cannot read, where it goes and how long each of those lasts. Stolnk is an iPhone app; this policy covers the app, the send pages people use to send you files, and this website.",
 		body: (
 			<>
 				<h2>Who this is</h2>
@@ -62,9 +54,10 @@ export const legalEn = {
 				<h2>What happens before anything reaches us</h2>
 				<p>
 					A file sent through the web page is encrypted in the sender's browser with a
-					one-time key, wrapped so that only the receiving Mac can unwrap it. The filename is
-					encrypted with it. What arrives at our servers is ciphertext, and we hold no key
-					that opens it.
+					one-time key, wrapped so that only the receiving iPhone can unwrap it. The filename
+					is encrypted with it. What arrives at our servers is ciphertext, and we hold no key
+					that opens it. When the sender is on the same Wi-Fi as the receiving iPhone, the
+					same ciphertext may go directly to the phone and never reach us at all.
 				</p>
 				<p>
 					<strong>Two routes are different, and we would rather say so here than have you
@@ -72,18 +65,17 @@ export const legalEn = {
 					An inbox address also accepts a file posted straight to it from a terminal or a
 					script (<code>curl -F "file=@…"</code>), because nothing outside a browser can run
 					that encryption. On that route the file reaches us as plaintext and{" "}
-					<em>we</em> build the envelope with the receiving Mac's public key. The Mac still
-					holds the only key that opens it, and what lands is identical — but for the length
-					of that one request the contents are readable by our server. They are held in
-					memory only, never written in that form, and nothing else about the transfer
-					changes. <a href="/how-it-works">How that works, including its limits</a>.
+					<em>we</em> build the envelope with the receiving iPhone's public key. The phone
+					still holds the only key that opens it — but for the length of that one request the
+					contents are readable by our server. They are held in memory only, never written
+					in that form. <a href="/how-it-works">How that works, including its limits</a>.
 				</p>
 				<p>
-					Outbound share links are the other exception. The Mac uploads the original
-					filename and bytes so any browser can download them; they are stored in
-					plaintext and are readable by us for the life of the link. The object is
-					deleted when the link expires, is spent or is revoked, and its terminal
-					metadata row is deleted after seven days.
+					Download links are the other exception. When you share a file from the app as a
+					download link, the app uploads the original filename and bytes so any browser can
+					download them; they are stored in plaintext and are readable by us for the life of
+					the link. The object is deleted when the link expires, is spent or is revoked, and
+					its terminal metadata row is deleted after seven days.
 				</p>
 
 				<h2>What we process, why, and on what basis</h2>
@@ -101,15 +93,15 @@ export const legalEn = {
 								<th scope="row">
 									Device id, the name you chose, two public keys, first and last seen
 								</th>
-								<td>It is how a link resolves to your Mac at all</td>
+								<td>It is how a link resolves to your iPhone at all</td>
 								<td>
-									Necessary to provide the service you asked for. Kept until you remove
-									the device
+									Necessary to provide the service you asked for. Kept until you delete
+									your account
 								</td>
 							</tr>
 							<tr>
 								<th scope="row">
-									Inbox path, display name, size limit, paused state
+									Inbox path, display name, size limit, paused state, password verifier
 								</th>
 								<td>The address half of every link</td>
 								<td>
@@ -121,7 +113,7 @@ export const legalEn = {
 									Transfer size, timestamps, target inbox, encrypted filename, wrapped
 									key, plaintext SHA-256
 								</th>
-								<td>Delivering the file, and letting your Mac verify it</td>
+								<td>Delivering the file, and letting your iPhone verify it</td>
 								<td>
 									Necessary to provide the service. See “How long” below — this is the
 									one that outlives the file
@@ -137,26 +129,21 @@ export const legalEn = {
 								</td>
 							</tr>
 							<tr>
-								<th scope="row">Outbound share filename, bytes, digest and controls</th>
+								<th scope="row">Download link filename, bytes, digest and controls</th>
 								<td>Publishing the file at the link you create</td>
 								<td>Necessary to provide the service. Plaintext bytes are deleted when the link ends; the terminal metadata row is deleted after seven days</td>
 							</tr>
 							<tr>
-								<th scope="row">Licence key hash, Creem order and customer ids, seats</th>
-								<td>Making a purchase real, and making a refund findable</td>
-								<td>
-									Performance of our contract with you, and our legal obligation to keep
-									transaction records. Kept while the licence is valid
-								</td>
-							</tr>
-							<tr>
 								<th scope="row">
-									iPhone app: App Store transaction ids, product id, Sandbox or Production
+									A record that this device runs the paid app; for in-app purchases made
+									before Stolnk became a paid download, the App Store transaction ids and
+									product id
 								</th>
-								<td>Confirming with Apple that a Pro purchase is real, and honouring a refund</td>
+								<td>Turning on the features the download includes, and honouring refunds of earlier purchases</td>
 								<td>
 									Performance of our contract with you, and our legal obligation to keep
-									transaction records. Kept while the purchase is valid
+									transaction records. Kept while your account exists, and transaction
+									records for as long as accounting law requires
 								</td>
 							</tr>
 							<tr>
@@ -167,24 +154,14 @@ export const legalEn = {
 									about a minute and written nowhere by us
 								</td>
 							</tr>
-							<tr>
-								<th scope="row">
-									An email address, if you ask to hear about a Windows build
-								</th>
-								<td>Sending you that one announcement, and nothing else</td>
-								<td>
-									Your consent, which you can withdraw by writing to us. Stored on its
-									own, linked to no device, licence or transfer, and deleted once the
-									announcement has gone out or you ask us to
-								</td>
-							</tr>
 						</tbody>
 					</table>
 				</div>
 				<p>
 					There is no advertising, no profiling, no automated decision-making that produces
 					legal or similarly significant effects, and nothing is sold or shared with data
-					brokers. There are none to share with.
+					brokers. There are none to share with. We never ask for your email address, phone
+					number or real name.
 				</p>
 
 				<h2>What we cannot read, at all</h2>
@@ -194,26 +171,31 @@ export const legalEn = {
 						Filenames. They are encrypted, though their <em>length</em> can be inferred
 						from the ciphertext.
 					</li>
-					<li>The folder on your Mac a file lands in. We are never told your local paths.</li>
-					<li>Anything on a Mac other than what its own app sends us.</li>
+					<li>Which folder in the app a file lands in.</li>
+					<li>Anything on your iPhone other than what the app itself sends us.</li>
 				</ul>
 
-				<h2>The iPhone app</h2>
+				<h2>On your iPhone</h2>
 				<p>
-					The iPhone app works the same way as the Mac app. There is no sign-in, no email and
-					no password: your identity is the name you choose and two keys generated on the
-					phone, kept in the Secure Enclave where the hardware has one. Files sent to one of
-					your addresses are decrypted on the phone and saved inside the app's own storage on
-					that iPhone. We never see them, and deleting the app deletes them.
+					There is no sign-in, no email and no password: your identity is the name you
+					choose and two keys generated on the phone and kept in its Secure Enclave. Files
+					sent to one of your addresses are decrypted on the phone and saved inside the app's
+					own storage on that iPhone. We never see them, and deleting the app deletes them.
 				</p>
 				<p>
-					A download link you create from the iPhone uploads that one file unencrypted, as
-					described in the table above, so that any browser can fetch it.
+					<strong>Local network.</strong> If you allow it, the app uses local network access
+					for one thing: receiving a file directly from a sender on the same Wi-Fi. That
+					traffic goes between the two devices and does not pass through us.
 				</p>
 				<p>
-					Pro is bought through the App Store. Apple processes the payment and we never see
-					your payment details or your Apple Account; the app sends us the transaction id so
-					our server can confirm the purchase with Apple.
+					<strong>Photos and Files.</strong> The app reads only the items you pick to import.
+					It does not browse your library.
+				</p>
+				<p>
+					<strong>Payment.</strong> Stolnk is a paid download. Apple sells it through the
+					App Store and processes the payment; we never see your payment details or your
+					Apple Account. The app tells our server only that this device is running the paid
+					app, so the features it includes are switched on.
 				</p>
 				<p>
 					The app has no advertising, no analytics SDK, no tracking and no App Tracking
@@ -224,16 +206,16 @@ export const legalEn = {
 					takes effect immediately: your name is released, every address and download link
 					stops working, and every row the device owned on our side — inboxes, transfer
 					records, links and usage — is deleted, along with any file still waiting in the
-					relay and every download link's file. Files already on your iPhone stay there. The
-					App Store purchase record is kept, because the purchase belongs to your Apple
-					Account and Restore Purchases has to find it again.
+					relay and every download link's file. Files already on your iPhone stay there until
+					you delete them or the app. Records of earlier in-app purchases are kept only as
+					long as accounting law requires.
 				</p>
 
 				<h2>The one hash we should point at</h2>
 				<p>
 					Among the transfer fields above is a <strong>SHA-256 of the file's unencrypted
-					contents</strong>. Your Mac needs it to verify that what it decrypted is what was
-					sent.
+					contents</strong>. Your iPhone needs it to verify that what it decrypted is what
+					was sent.
 				</p>
 				<p>
 					We are naming it separately because it is a content hash, and a content hash has a
@@ -245,9 +227,9 @@ export const legalEn = {
 
 				<h2>How long</h2>
 				<p>
-					<strong>The encrypted file is deleted the moment your Mac confirms it landed</strong>{" "}
-					— not on a schedule, immediately. A file your Mac never collects is deleted when
-					the hold expires: 24 hours on Free, 7 days on Pro.
+					<strong>The encrypted file is deleted the moment your iPhone confirms it landed</strong>{" "}
+					— not on a schedule, immediately. A file your iPhone never collects is deleted when
+					the hold expires, after 7 days.
 				</p>
 				<p>
 					<strong>The metadata row outlives the file, by 30 days.</strong> After a transfer
@@ -259,14 +241,8 @@ export const legalEn = {
 					is still answerable.
 				</p>
 				<p>
-					You do not have to wait for it. <strong>Clear Records</strong> in the Mac app
-					forgets an inbox's finished transfers immediately and keeps the inbox and its
-					address; deleting an inbox or removing the device does the same thing and takes
-					the address with it. Both cascade.
-				</p>
-				<p>
-					Purchase records are kept while the licence is valid, and for as long afterwards
-					as accounting and tax law requires us to keep transaction records.
+					You do not have to wait for it. Deleting an inbox removes its transfer records
+					along with the address, and deleting your account removes everything at once.
 				</p>
 
 				<h2>Where it goes</h2>
@@ -282,19 +258,11 @@ export const legalEn = {
 					<li>
 						<strong>Cloudflare, Inc.</strong> (United States, with a global edge network)
 						provides the servers, the database and the object storage. Everything in the
-						table above except the purchase records lives there, and traffic to stolnk.com
-						passes through their network.
+						table above lives there, and traffic to stolnk.com passes through their network.
 					</li>
 					<li>
-						<strong>Creem</strong> processes payments and issues licence keys, and is the
-						merchant of record for every purchase. Your payment details go to them and
-						never to us.
-					</li>
-					<li>
-						<strong>Apple</strong> notarises the Mac app. That check happens between your
-						Mac and Apple; we are not part of it and are not told the outcome. Apple also
-						sells Pro in the iPhone app and is the merchant for those purchases; we receive
-						the transaction record and nothing about your payment.
+						<strong>Apple</strong> distributes the app through the App Store and is the
+						merchant for every purchase of it. We receive nothing about your payment.
 					</li>
 				</ul>
 				<p>
@@ -303,8 +271,8 @@ export const legalEn = {
 					European Economic Area, the United Kingdom or Switzerland, transfers rely on those
 					clauses. If you are in mainland China, installing and using Stolnk is your
 					separate consent to this cross-border transfer for the purposes listed above; you
-					can withdraw it at any time by removing your device, which stops the transfer for
-					the future.
+					can withdraw it at any time by deleting your account in the app, which stops the
+					transfer for the future.
 				</p>
 
 				<h2>Your rights</h2>
@@ -312,13 +280,13 @@ export const legalEn = {
 					Wherever you are, you can ask us to show you what we hold, correct it, delete it,
 					give you a portable copy, restrict what we do with it, or object to it. Where we
 					rely on consent you can withdraw it, and withdrawing does not make what came
-					before unlawful.
+					before unlawful. Most of this you can do yourself in the app — deleting your
+					account is immediate.
 				</p>
 				<p>
-					Email <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>. The practical limit
-					is that we cannot identify you from a licence key hash alone, so tell us the order
-					number or the device name — we will not ask for more identification than the
-					request needs.
+					Otherwise email <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a> and tell
+					us your Stolnk name. We hold no email address or real name for you, so we will not
+					ask for more identification than the request needs.
 				</p>
 				<p>
 					If we get it wrong you can complain to your data protection authority: the
@@ -330,8 +298,8 @@ export const legalEn = {
 				<h2>Security, and what happens if it fails</h2>
 				<p>
 					Files are encrypted before they reach us, connections are TLS-only with HSTS, the
-					site runs under a strict Content Security Policy, and licence keys are stored only
-					as hashes. None of that is a guarantee.
+					site runs under a strict Content Security Policy, and the app's private keys never
+					leave the Secure Enclave. None of that is a guarantee.
 				</p>
 				<p>
 					If a breach happens that is likely to affect you, we will tell you and the
@@ -384,18 +352,22 @@ export const legalEn = {
 				<p>
 					These terms are between you and <strong>{COMPANY_EN}</strong> ({COMPANY_ZH}).
 					Downloading, installing or using Stolnk means you accept them. If you do not, do
-					not use it — and if you have paid, ask for a refund.
+					not use it.
 				</p>
 				<p>
-					You need to be old enough to enter a contract where you live to buy a licence. If
-					you are buying for a company, you are confirming you may bind it.
+					Stolnk is an iPhone app distributed through the App Store. Your licence to the app
+					itself is Apple's{" "}
+					<a href="https://www.apple.com/legal/internet-services/itunes/dev/stdeula/">
+						Licensed Application End User License Agreement
+					</a>
+					; these terms add the rules for the service behind it. Apple is not a party to
+					these terms and is not responsible for Stolnk or its support.
 				</p>
 
 				<h2>What you get</h2>
 				<p>
-					Stolnk is a one-time purchase, not a subscription. Buying Pro gives you a
-					permanent, worldwide, non-exclusive, non-transferable licence to use the software
-					on up to three Macs at a time, together with:
+					Stolnk is a paid download, not a subscription, and has no in-app purchases. Buying
+					it on the App Store gives you every feature of the app, together with:
 				</p>
 				<ul>
 					<li>Every V1.x update.</li>
@@ -403,13 +375,9 @@ export const legalEn = {
 				</ul>
 				<p>
 					The word "unlimited" is deliberately absent, and{" "}
-					<a href="/pricing">the pricing page</a> explains why at length. If a V2 with
-					genuinely new capabilities ever exists it will be a separate paid upgrade, and
-					your V1 licence keeps working whether or not you take it.
-				</p>
-				<p>
-					Free use is the same software with a smaller allowance. It is not a trial and does
-					not expire.
+					<a href="/pricing">the pricing page</a> explains why. If a V2 with genuinely new
+					capabilities ever exists it may be sold separately, and the version you bought
+					keeps working whether or not you take it.
 				</p>
 				<p>
 					<strong>The roadmap is not part of this agreement.</strong> Features described as
@@ -429,8 +397,6 @@ export const legalEn = {
 
 				<h2>What you may not do</h2>
 				<ul>
-					<li>Resell, sublicense or redistribute the software itself.</li>
-					<li>Share a licence key beyond the seats it covers.</li>
 					<li>
 						Use Stolnk to distribute malware, material that infringes someone's rights,
 						child sexual abuse material, or anything else illegal where you or the
@@ -464,19 +430,19 @@ export const legalEn = {
 
 				<h2>What is on your side of the line</h2>
 				<p>
-					You choose which folders Stolnk writes to, and you decide who gets a link. A link
-					is a capability: anyone holding it can send you files. Treat it accordingly.
+					You decide who gets a link. A link is a capability: anyone holding it can send you
+					files. Treat it accordingly, and pause or reset an address you no longer want used.
 				</p>
 				<p>
-					Received files are marked with <code>com.apple.quarantine</code> exactly as a
-					browser download would be, but that is a warning mechanism, not a scanner.
+					Received files are not scanned for malware. Be as careful opening them as you would
+					be with any file from someone else.
 				</p>
 				<p>
-					<strong>Keys cannot move to a new Mac.</strong> They are generated in the Secure
-					Enclave and cannot be exported, by us or by anyone. A new machine means a new
-					address, and anything still queued for the old one cannot be decrypted by
-					anything, including us. This is a property of the design and not a fault we can
-					repair after the fact.
+					<strong>Keys cannot move to a new iPhone.</strong> They are generated in the Secure
+					Enclave and cannot be exported, by us or by anyone. A new phone means new keys,
+					and anything still queued for the old one cannot be decrypted by anything,
+					including us. This is a property of the design and not a fault we can repair after
+					the fact.
 				</p>
 
 				<h2>Availability</h2>
@@ -484,18 +450,16 @@ export const legalEn = {
 					Stolnk is built and run by one person. We do not offer an uptime guarantee,
 					because we could not honour one. What we do commit to is that a month's allowance
 					running out pauses new uploads rather than deleting anything, and that nothing is
-					ever billed on top of the purchase price — there is no mechanism in Stolnk that
-					could produce an invoice.
+					ever billed on top of the purchase price.
 				</p>
 
 				<h2>If we ever stop</h2>
 				<p>
-					A perpetual licence that depends on a hosted relay has to say what happens if the
-					relay goes away, so: if we decide to discontinue the service we will give at least
-					<strong> 90 days' notice</strong> by email and on this site, keep the relay running
-					through that period, and publish a final build that continues to work for anything
-					that does not need our servers. If we stop within <strong>12 months</strong> of
-					your purchase, you get a refund of what you paid.
+					An app that depends on a hosted relay has to say what happens if the relay goes
+					away, so: if we decide to discontinue the service we will give at least
+					<strong> 90 days' notice</strong> in the app and on this site, and keep the relay
+					running through that period. Files already on your iPhone stay there and stay
+					yours.
 				</p>
 				<p>
 					We may transfer this agreement to whoever acquires the business, on the same
@@ -504,58 +468,48 @@ export const legalEn = {
 
 				<h2>Price, tax and payment</h2>
 				<p>
-					In the iPhone app, Pro is sold by Apple through the App Store. Apple's terms apply
-					to that payment, and refunds for it are requested from Apple at{" "}
-					<a href="https://reportaproblem.apple.com">reportaproblem.apple.com</a>. The rest of
-					this section is about purchases made on this website.
+					Stolnk is sold by Apple through the App Store. Apple's terms apply to the payment,
+					and any VAT, GST or sales tax is handled by Apple. Nothing is sold on this website.
 				</p>
 				<p>
-					Creem is the merchant of record. Your contract of sale is with them as well as
-					this licence with us, their terms apply to the payment itself, and any VAT, GST or
-					sales tax is handled by them and may be added at checkout depending on where you
-					are.
-				</p>
-				<p>
-					We may change the price of new purchases at any time. It never changes what you
+					We may change the price for new purchases at any time. It never changes what you
 					already bought.
 				</p>
 
 				<h2>Refunds</h2>
 				<p>
-					14 days, no questions. Email{" "}
-					<a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a> and it is done. A refund
-					returns that Mac to Free and pauses any inbox beyond the first. Nothing is deleted,
-					and buying again restores it as it was.
+					Refunds are handled by Apple. Request one at{" "}
+					<a href={REPORT_A_PROBLEM}>reportaproblem.apple.com</a>.
 				</p>
 				<p>
-					If you are a consumer with a statutory right of withdrawal — in the EU or the UK,
-					for instance — this does not replace it. Where our 14 days and your statutory
-					rights differ, whichever is better for you is the one that applies.
+					If you are a consumer with a statutory right of withdrawal or other statutory
+					remedies — in the EU or the UK, for instance — nothing here replaces them.
 				</p>
 
 				<h2>Support</h2>
 				<p>
-					Email only, and best-effort. Promising a response time we could not keep would be
-					another thing this page should not say.
+					By email to <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>, best-effort.
+					Promising a response time we could not keep would be another thing this page
+					should not say.
 				</p>
 
 				<h2>Suspension and ending it</h2>
 				<p>
-					You can stop using Stolnk at any time; deleting the app and its inboxes removes
+					You can stop using Stolnk at any time; deleting your account in the app removes
 					your data as described in the <a href="/privacy">privacy policy</a>.
 				</p>
 				<p>
-					We may suspend or terminate a licence for a serious or repeated breach of the
-					list above. Except where the breach is severe or the law requires immediate
-					action, we will describe the problem and give you a reasonable chance to fix it
-					first. If we terminate a paid licence for a breach that turns out not to be yours,
-					we reinstate it.
+					We may suspend or close an account, an inbox or a link for a serious or repeated
+					breach of the list above. Except where the breach is severe or the law requires
+					immediate action, we will describe the problem and give you a reasonable chance to
+					fix it first. If we act on a breach that turns out not to be yours, we restore what
+					we closed.
 				</p>
 
 				<h2>Warranty, and your rights as a consumer</h2>
 				<p>
-					Except as this section says, the software is provided as it is, without warranties
-					of any kind.
+					Except as this section says, the software and the service are provided as they
+					are, without warranties of any kind.
 				</p>
 				<p>
 					<strong>
@@ -585,8 +539,7 @@ export const legalEn = {
 				<p>
 					If they change materially, the date at the top changes and we will tell you before
 					the change takes effect where we can reach you. Continuing to use Stolnk
-					afterwards means accepting the new version. If you would rather not, stop using it
-					— and if you are inside the refund window, the refund still stands.
+					afterwards means accepting the new version. If you would rather not, stop using it.
 				</p>
 
 				<h2>Law and disputes</h2>
@@ -606,12 +559,10 @@ export const legalEn = {
 						If a clause turns out to be unenforceable, the rest still stands and that clause
 						is read as narrowly as it needs to be to work.
 					</li>
+					<li>Not enforcing something once is not giving it up.</li>
 					<li>
-						Not enforcing something once is not giving it up.
-					</li>
-					<li>
-						These terms and the privacy policy are the whole agreement about Stolnk, and
-						replace anything said earlier.
+						These terms, Apple's licence agreement and the privacy policy are the whole
+						agreement about Stolnk, and replace anything said earlier.
 					</li>
 					<li>
 						This page exists in English and Chinese. Both are written to say the same thing;
@@ -629,18 +580,21 @@ export const legalEn = {
 	support: {
 		title: "Support",
 		updated: `Last updated ${UPDATED_EN}`,
-		lede: "Help with Stolnk on the Mac and on iPhone. One mailbox, read by a person.",
+		lede: "Help with Stolnk for iPhone. One mailbox, read by a person.",
 		body: (
 			<>
 				<h2>Contact</h2>
 				<p>
 					Email <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>. Tell us your Stolnk
-					name and, for a purchase question, the order number or the date you bought it. We
-					answer by email, best-effort, usually within a few working days.
+					name, and what you were doing when the problem happened. We answer by email,
+					best-effort, usually within a few working days.
 				</p>
 
-				<h2>iPhone app</h2>
+				<h2>Using the app</h2>
 				<ul>
+					<li>
+						<strong>Requirements.</strong> An iPhone with iOS 17 or later.
+					</li>
 					<li>
 						<strong>Receiving files.</strong> Pick a name, then turn a folder in the app into
 						an address. Anyone can open that address in a browser and send you files — no app
@@ -653,10 +607,14 @@ export const legalEn = {
 						revoke or delete it at any time.
 					</li>
 					<li>
-						<strong>Pro and Restore Purchases.</strong> Pro is a one-time App Store purchase.
-						On a new iPhone or after registering again, open Me → Plan and tap Restore
-						Purchases. App Store refunds are requested from Apple at{" "}
-						<a href="https://reportaproblem.apple.com">reportaproblem.apple.com</a>.
+						<strong>Buying and reinstalling.</strong> Stolnk is a paid download with every
+						feature included and no in-app purchases. On a new iPhone, download it again from
+						the App Store with the same Apple Account at no charge. Refunds are requested
+						from Apple at <a href={REPORT_A_PROBLEM}>reportaproblem.apple.com</a>.
+					</li>
+					<li>
+						<strong>Changing iPhones.</strong> Keys cannot be moved, so open Stolnk on the
+						old phone and collect any waiting files before you switch.
 					</li>
 					<li>
 						<strong>Deleting your account.</strong> Me → Delete account. It releases your
@@ -665,10 +623,10 @@ export const legalEn = {
 					</li>
 				</ul>
 
-				<h2>Mac app</h2>
+				<h2>Other platforms</h2>
 				<p>
-					Download it from the <a href="/download">download page</a>. Licence and refund
-					questions for purchases made on this website go to the same address above.
+					Stolnk is iPhone only; there is no Mac, Windows or Android app. People sending you
+					files need nothing but a browser.
 				</p>
 
 				<h2>Policies</h2>
@@ -689,7 +647,7 @@ export const legalZh: typeof legalEn = {
 	privacy: {
 		title: "隐私政策",
 		updated: `最后更新于 ${UPDATED_ZH}`,
-		lede: "Stolnk 存了什么、读不到什么、数据去了哪里，以及各自保留多久。它是照着真实的数据库结构写的，不是绕着它写的。",
+		lede: "Stolnk 存了什么、读不到什么、数据去了哪里，以及各自保留多久。Stolnk 是一个 iPhone App；本政策适用于该 App、别人用来给你发文件的发送页，以及本网站。",
 		body: (
 			<>
 				<h2>我们是谁</h2>
@@ -704,15 +662,15 @@ export const legalZh: typeof legalEn = {
 
 				<h2>在任何东西到达我们之前</h2>
 				<p>
-					通过网页发出的文件，在发送方的浏览器里就用一把一次性密钥加密，而这把密钥被包装成只有接收端那台 Mac 能解开的形式。文件名也用它加密。到达我们服务器的是密文，我们手里没有任何能打开它的密钥。
+					通过网页发出的文件，在发送方的浏览器里就用一把一次性密钥加密，而这把密钥被包装成只有接收端那台 iPhone 能解开的形式。文件名也用它加密。到达我们服务器的是密文，我们手里没有任何能打开它的密钥。发送方和接收端 iPhone 在同一个 Wi-Fi 下时，同样的密文可能直接发到手机上，根本不经过我们。
 				</p>
 				<p>
 					<strong>有两条路不一样，我们宁可写在这里，也不愿你自己撞见。</strong>{" "}
-					收件地址同样接受从终端或脚本直接 POST 上来的文件（<code>curl -F "file=@…"</code>），因为浏览器以外的东西跑不了那套加密。走这条路时，文件是以明文到达我们这里的，再由<em>我们</em>用接收端 Mac 的公钥完成封装。能打开它的钥匙依然只在那台 Mac 手里，最终落地的东西也完全一样——但在那一次请求持续的时间里，内容对我们的服务器是可读的。它只存在于内存中，从不以那种形式写下来，这次传输的其余部分也没有任何不同。
+					收件地址同样接受从终端或脚本直接 POST 上来的文件（<code>curl -F "file=@…"</code>），因为浏览器以外的东西跑不了那套加密。走这条路时，文件是以明文到达我们这里的，再由<em>我们</em>用接收端 iPhone 的公钥完成封装。能打开它的钥匙依然只在那台手机里——但在那一次请求持续的时间里，内容对我们的服务器是可读的。它只存在于内存中，从不以那种形式写下来。
 					<a href="/how-it-works">这套机制是怎么运作的，以及它的局限</a>。
 				</p>
 				<p>
-					出站分享链接是另一个例外。Mac 会上传原始文件名和字节，让任意浏览器都能下载；在链接有效期间，它们以明文存放，我们能够读取。链接过期、次数用完或被撤销时，对象会被删除；终态元数据记录在七天后删除。
+					下载链接是另一个例外。你在 App 里把文件分享为下载链接时，App 会上传原始文件名和字节，让任意浏览器都能下载；在链接有效期间，它们以明文存放，我们能够读取。链接过期、次数用完或被撤销时，对象会被删除；终态元数据记录在七天后删除。
 				</p>
 
 				<h2>我们处理什么、为什么、依据是什么</h2>
@@ -730,11 +688,11 @@ export const legalZh: typeof legalEn = {
 								<th scope="row">
 									设备标识、你选的名字、两把公钥、首次与最后出现时间
 								</th>
-								<td>这是链接能指向你 Mac 的前提</td>
-								<td>为提供你所要求的服务所必需。保留至你移除该设备</td>
+								<td>这是链接能指向你 iPhone 的前提</td>
+								<td>为提供你所要求的服务所必需。保留至你删除账号</td>
 							</tr>
 							<tr>
-								<th scope="row">收件箱路径、显示名、大小上限、是否暂停</th>
+								<th scope="row">收件箱路径、显示名、大小上限、是否暂停、密码校验值</th>
 								<td>每条链接的地址部分</td>
 								<td>为提供服务所必需。保留至你删除该收件箱</td>
 							</tr>
@@ -742,7 +700,7 @@ export const legalZh: typeof legalEn = {
 								<th scope="row">
 									传输大小、时间戳、目标收件箱、加密文件名、被包装的密钥、明文 SHA-256
 								</th>
-								<td>把文件送到，并让你的 Mac 能核对它</td>
+								<td>把文件送到，并让你的 iPhone 能核对它</td>
 								<td>为提供服务所必需。见下方「保留多久」——这一项比文件本身活得久</td>
 							</tr>
 							<tr>
@@ -753,39 +711,29 @@ export const legalZh: typeof legalEn = {
 								</td>
 							</tr>
 							<tr>
-								<th scope="row">出站分享的文件名、字节、摘要与控制项</th>
+								<th scope="row">下载链接的文件名、字节、摘要与控制项</th>
 								<td>把文件发布到你创建的链接</td>
 								<td>为提供服务所必需。明文字节在链接终止时删除；终态元数据记录在七天后删除</td>
 							</tr>
 							<tr>
-								<th scope="row">授权码哈希、Creem 订单与客户标识、席位数</th>
-								<td>让购买成立，也让退款能找到对应授权</td>
+								<th scope="row">
+									这台设备运行的是付费版 App 的记录；对于 Stolnk 改为付费下载之前的 App 内购买，还有 App Store 交易号和商品标识
+								</th>
+								<td>开启下载所包含的功能，以及处理早期购买的退款</td>
 								<td>
-									为履行与你的合同所必需，以及我们保存交易记录的法定义务。授权有效期内保留
+									履行与你的合同，以及保存交易记录的法定义务。账号存在期间保留；交易记录按会计法规要求的年限保留
 								</td>
-							</tr>
-							<tr>
-								<th scope="row">iPhone App：App Store 交易号、商品标识、沙盒或生产环境</th>
-								<td>向 Apple 核实 Pro 购买是否真实，以及处理退款</td>
-								<td>履行与你的合同，以及保存交易记录的法定义务。购买有效期间保留</td>
 							</tr>
 							<tr>
 								<th scope="row">IP 地址</th>
 								<td>限流，避免单个客户端把服务打满</td>
 								<td>基于我们维持服务可用的正当利益。在内存中保留约一分钟，我们不写入任何地方</td>
 							</tr>
-							<tr>
-								<th scope="row">邮箱地址，如果你要求在 Windows 版发布时收到通知</th>
-								<td>只用来发这一封通知，没有别的用途</td>
-								<td>
-									基于你的同意，你可以随时写信撤回。单独存放，不与任何设备、授权或传输记录关联；通知发出后即删除，你要求删除时也删除
-								</td>
-							</tr>
 						</tbody>
 					</table>
 				</div>
 				<p>
-					没有广告，没有用户画像，没有会产生法律效果或类似重大影响的自动化决策，也不出售或向数据经纪商共享任何数据——根本没有可共享的对象。
+					没有广告，没有用户画像，没有会产生法律效果或类似重大影响的自动化决策，也不出售或向数据经纪商共享任何数据——根本没有可共享的对象。我们从不索取你的邮箱、手机号或真实姓名。
 				</p>
 
 				<h2>我们完全读不到的东西</h2>
@@ -794,27 +742,32 @@ export const legalZh: typeof legalEn = {
 					<li>
 						文件名。它是加密的，不过从密文长度可以推断出名字的<em>长度</em>。
 					</li>
-					<li>文件落在你 Mac 上的哪个文件夹。你的本地路径从来不会告诉我们。</li>
-					<li>Mac 上除了它自己的 App 主动发给我们的之外的任何东西。</li>
+					<li>文件落在 App 里的哪个文件夹。</li>
+					<li>你 iPhone 上除了这个 App 主动发给我们的之外的任何东西。</li>
 				</ul>
 
-				<h2>iPhone App</h2>
+				<h2>在你的 iPhone 上</h2>
 				<p>
-					iPhone App 与 Mac App 的工作方式相同。没有登录、没有邮箱、没有密码：你的身份就是你选的名字，加上在手机上生成的两把密钥，硬件支持时保存在安全隔区里。发到你地址的文件在手机上解密，保存在这台 iPhone 上该 App 自己的存储空间里。我们看不到它们；删除 App 即删除这些文件。
+					没有登录、没有邮箱、没有密码：你的身份就是你选的名字，加上在手机上生成、保存在安全隔区里的两把密钥。发到你地址的文件在手机上解密，保存在这台 iPhone 上该 App 自己的存储空间里。我们看不到它们；删除 App 即删除这些文件。
 				</p>
-				<p>从 iPhone 创建的下载链接会把那一个文件以明文上传（见上表），以便任何浏览器都能下载。</p>
 				<p>
-					Pro 通过 App Store 购买。由 Apple 处理支付，我们看不到你的支付信息和 Apple 账户；App 只把交易号发给我们，服务器据此向 Apple 核实这笔购买。
+					<strong>本地网络。</strong>如果你允许，App 使用本地网络权限只为一件事：直接接收同一 Wi-Fi 下发送方发来的文件。这部分流量在两台设备之间直接传输，不经过我们。
+				</p>
+				<p>
+					<strong>相册与「文件」。</strong>App 只读取你主动选择导入的项目，不会浏览你的图库。
+				</p>
+				<p>
+					<strong>付款。</strong>Stolnk 是付费下载应用，由 Apple 通过 App Store 销售并处理支付；我们看不到你的支付信息和 Apple 账户。App 只告诉我们的服务器「这台设备运行的是付费版 App」，以便开启它所包含的功能。
 				</p>
 				<p>App 中没有广告、没有统计 SDK、没有追踪，也没有 App 跟踪透明度弹窗。</p>
 				<p>
-					<strong>删除账号。</strong>在 App 中进入「我的 → 删除账号」，立即生效：你的名字被释放，所有地址和下载链接失效，这台设备在我们这边拥有的全部记录——收件箱、传输记录、链接与用量——都会被删除，仍在中转中等待的文件和所有下载链接的文件也一并删除。已经在你 iPhone 上的文件会保留。App Store 购买记录会保留，因为这笔购买属于你的 Apple 账户，「恢复购买」需要能再次找到它。
+					<strong>删除账号。</strong>在 App 中进入「我的 → 删除账号」，立即生效：你的名字被释放，所有地址和下载链接失效，这台设备在我们这边拥有的全部记录——收件箱、传输记录、链接与用量——都会被删除，仍在中转中等待的文件和所有下载链接的文件也一并删除。已经在你 iPhone 上的文件会保留，直到你删除它们或删除 App。早期 App 内购买的记录只按会计法规要求的年限保留。
 				</p>
 
 				<h2>有一个哈希我们要单独点出来</h2>
 				<p>
 					上表的传输字段里有一项是<strong>文件未加密内容的 SHA-256</strong>
-					。你的 Mac 需要用它核对解密出来的东西就是发出去的东西。
+					。你的 iPhone 需要用它核对解密出来的东西就是发出去的东西。
 				</p>
 				<p>
 					之所以单独说，是因为它是一种内容哈希，而内容哈希有一个值得你知道的性质：它不会泄露文件里有什么，但任何手上已经有某个特定文件副本的人，都能用它来验证那个文件是否经过了这里。这件事我们宁愿你从我们这儿知道，而不是从数据库结构里发现。
@@ -822,19 +775,14 @@ export const legalZh: typeof legalEn = {
 
 				<h2>保留多久</h2>
 				<p>
-					<strong>加密文件本身，在你的 Mac 确认落盘的那一刻就删除</strong>
-					——不是按计划清理，是立刻。你的 Mac 一直没来取的文件，会在保留期到点时删除：免费版 24 小时，专业版 7 天。
+					<strong>加密文件本身，在你的 iPhone 确认收到的那一刻就删除</strong>
+					——不是按计划清理，是立刻。你的 iPhone 一直没来取的文件，会在 7 天保留期到点时删除。
 				</p>
 				<p>
 					<strong>元数据记录比文件多活 30 天。</strong>
 					一次传输结束后，记录它的大小、时间戳、加密文件名、被包装密钥和明文哈希的那一行会保留 30 天，然后被自动删除。传输结束后 Stolnk 里没有任何地方再读这些记录——产品里没有历史记录功能——所以这个窗口存在的理由只有两个：让页面还开着的发送方看到「已送达」而不是一个错误，以及让一周前的支持问题还答得上来。
 				</p>
-				<p>
-					你不必等它。Mac App 里的<strong>「清除记录」</strong>会立即忘掉某个收件箱已完成的传输，并保留该收件箱和它的地址；删除收件箱或移除设备做的是同一件事，只是会连地址一起交出去。两者都是级联的。
-				</p>
-				<p>
-					购买记录在授权有效期内保留，之后按会计和税务法规要求我们保存交易记录的年限继续保留。
-				</p>
+				<p>你不必等它。删除收件箱会连同地址一起删除它的传输记录；删除账号会一次性删除全部。</p>
 
 				<h2>数据去了哪里</h2>
 				<p>
@@ -845,26 +793,23 @@ export const legalZh: typeof legalEn = {
 				</p>
 				<ul>
 					<li>
-						<strong>Cloudflare, Inc.</strong>（美国，全球边缘网络）提供服务器、数据库和对象存储。上表中除购买记录外的一切都在那里，发往 stolnk.com 的流量也经过他们的网络。
+						<strong>Cloudflare, Inc.</strong>（美国，全球边缘网络）提供服务器、数据库和对象存储。上表中的一切都在那里，发往 stolnk.com 的流量也经过他们的网络。
 					</li>
 					<li>
-						<strong>Creem</strong> 处理支付并签发授权码，是每一笔购买的记录商户。你的支付信息进的是它那里，永远不会到我们这里。
-					</li>
-					<li>
-						<strong>Apple</strong> 为 Mac App 做公证。这个校验发生在你的 Mac 和 Apple 之间，我们不参与，也不会被告知结果。iPhone App 中的 Pro 也由 Apple 通过 App Store 销售，Apple 是这些购买的商户；我们只收到交易记录，不接触任何支付信息。
+						<strong>Apple</strong> 通过 App Store 分发本 App，是每一笔购买的商户。我们不接触任何支付信息。
 					</li>
 				</ul>
 				<p>
-					我们按各方自己的条款和数据保护承诺使用它们，在适用的情形下包括标准合同条款。如果你在欧洲经济区、英国或瑞士，跨境传输依据的是那些条款。如果你在中国大陆，安装并使用 Stolnk 即构成你对上述目的下这一跨境传输的单独同意；你可以随时通过移除设备撤回同意，撤回后不再发生新的传输。
+					我们按各方自己的条款和数据保护承诺使用它们，在适用的情形下包括标准合同条款。如果你在欧洲经济区、英国或瑞士，跨境传输依据的是那些条款。如果你在中国大陆，安装并使用 Stolnk 即构成你对上述目的下这一跨境传输的单独同意；你可以随时在 App 内删除账号来撤回同意，撤回后不再发生新的传输。
 				</p>
 
 				<h2>你的权利</h2>
 				<p>
-					无论你在哪里，你都可以要求我们出示所持有的数据、更正它、删除它、给你一份可携带的副本、限制我们的处理，或提出反对。凡是以同意为依据的，你可以撤回同意，撤回不影响此前处理的合法性。
+					无论你在哪里，你都可以要求我们出示所持有的数据、更正它、删除它、给你一份可携带的副本、限制我们的处理，或提出反对。凡是以同意为依据的，你可以撤回同意，撤回不影响此前处理的合法性。其中大部分你可以直接在 App 里完成——删除账号即时生效。
 				</p>
 				<p>
-					发邮件到 <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>
-					。现实的限制是我们无法仅凭一个授权码哈希认出你，所以请附上订单号或设备名——我们不会索取超出该请求所需的身份材料。
+					其他情况请发邮件到 <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>
+					，并告诉我们你的 Stolnk 名字。我们没有你的邮箱或真实姓名，因此不会索取超出该请求所需的身份材料。
 				</p>
 				<p>
 					如果我们做错了，你可以向监管机构投诉：在欧洲经济区或英国是你所在国的监督机构，在中国大陆是国家网信部门及其地方机构。我们希望你先告诉我们，但那是你的选择，不是前置条件。
@@ -872,7 +817,7 @@ export const legalZh: typeof legalEn = {
 
 				<h2>安全，以及万一失守</h2>
 				<p>
-					文件在到达我们之前就已加密，连接仅走 TLS 并启用 HSTS，站点运行在严格的内容安全策略之下，授权码只以哈希形式存储。这些都不构成保证。
+					文件在到达我们之前就已加密，连接仅走 TLS 并启用 HSTS，站点运行在严格的内容安全策略之下，App 的私钥从不离开安全隔区。这些都不构成保证。
 				</p>
 				<p>
 					如果发生可能影响到你的数据泄露，我们会不迟延地通知你和相关主管部门——在法律设定该期限的情形下，自知悉起 72 小时内——并且会说清楚发生了什么，而不是说什么最好听。
@@ -910,25 +855,26 @@ export const legalZh: typeof legalEn = {
 			<>
 				<h2>本协议</h2>
 				<p>
-					本条款是你与<strong>{COMPANY_ZH}</strong>之间的协议。下载、安装或使用 Stolnk 即表示你接受它。如果不接受，请不要使用——如果你已经付过款，请申请退款。
+					本条款是你与<strong>{COMPANY_ZH}</strong>之间的协议。下载、安装或使用 Stolnk 即表示你接受它。如果不接受，请不要使用。
 				</p>
 				<p>
-					购买授权需要你在所在地已达到可订立合同的年龄。如果你是代表公司购买，即表示你确认自己有权约束该公司。
+					Stolnk 是通过 App Store 分发的 iPhone App。你对 App 本身的使用许可适用 Apple 的
+					<a href="https://www.apple.com/legal/internet-services/itunes/dev/stdeula/">
+						《许可应用最终用户许可协议》
+					</a>
+					；本条款补充的是其背后服务的规则。Apple 不是本条款的当事方，也不对 Stolnk 及其支持负责。
 				</p>
 
 				<h2>你得到的是什么</h2>
-				<p>
-					Stolnk 是一次性买断，不是订阅。购买专业版即获得一份永久的、全球范围的、非独占的、不可转让的软件使用许可，最多同时在三台 Mac 上使用，并包含：
-				</p>
+				<p>Stolnk 是付费下载，不是订阅，也没有 App 内购买。在 App Store 购买后即获得 App 的全部功能，并包含：</p>
 				<ul>
 					<li>全部 V1.x 更新。</li>
 					<li>每月 300 GB 中转流量，只要我们还在运行该服务就一直有效。</li>
 				</ul>
 				<p>
 					「无限」这个词是刻意不出现的，<a href="/pricing">定价页</a>
-					用很长的篇幅解释了原因。如果将来真的出现能力上有实质变化的 V2，那会是一次独立的付费升级，而且不管你升不升，你的 V1 授权都继续有效。
+					解释了原因。如果将来真的出现能力上有实质变化的 V2，它可能会单独销售，而且不管你升不升，你买到的版本都继续可用。
 				</p>
-				<p>免费使用的是同一套软件，只是额度更小。它不是试用，也不会到期。</p>
 				<p>
 					<strong>路线图不属于本协议的一部分。</strong>
 					标注为「V1.x 内会做」的功能是我们的意图，不是你为之付款的承诺；你买到的是今天这个样子的软件，加上 V1.x 实际发布出来的内容。
@@ -942,8 +888,6 @@ export const legalZh: typeof legalEn = {
 
 				<h2>你不可以做的事</h2>
 				<ul>
-					<li>转售、再许可或再分发软件本身。</li>
-					<li>把授权码分享到超出其席位数的范围。</li>
 					<li>
 						用 Stolnk 传播恶意软件、侵犯他人权利的材料、儿童性虐待材料，或在你或接收方所在地属于违法的任何其他内容。
 					</li>
@@ -958,69 +902,62 @@ export const legalZh: typeof legalEn = {
 					<a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>。
 				</p>
 				<p>
-					有一条限制值得说明：我们读不到经过的内容，因此无法主动搜索侵权材料，也无法通过查看来核实一项举报。我们能做的是停用某个收件箱、某条链接或某个账户，并且在举报可信或有生效法律文书要求时会这么做。请告诉我们链接、时间和问题所在。
+					有一条限制值得说明：我们读不到经过的内容，因此无法主动搜索侵权材料，也无法通过查看来核实一项举报。我们能做的是停用某个收件箱、某条链接或某个账号，并且在举报可信或有生效法律文书要求时会这么做。请告诉我们链接、时间和问题所在。
 				</p>
 
 				<h2>属于你这一侧的责任</h2>
 				<p>
-					由你决定 Stolnk 往哪些文件夹里写，也由你决定谁拿到链接。一条链接就是一份权限：任何持有它的人都能给你发文件，请照此对待。
+					由你决定谁拿到链接。一条链接就是一份权限：任何持有它的人都能给你发文件，请照此对待；不想再用的地址可以暂停或重置。
 				</p>
+				<p>收到的文件不会被做恶意软件扫描。打开它们时，请像对待任何来自他人的文件一样小心。</p>
 				<p>
-					收到的文件会像浏览器下载一样被打上 <code>com.apple.quarantine</code>{" "}
-					标记，但那是一种提示机制，不是杀毒扫描。
-				</p>
-				<p>
-					<strong>密钥没法迁移到新 Mac。</strong>
-					它们在 Secure Enclave 内生成且无法导出，我们不行，任何人都不行。换新机器意味着一个新地址，而还在等旧机器的文件，任何人——包括我们——都解不开。这是设计本身的性质，不是事后能修复的故障。
+					<strong>密钥没法迁移到新 iPhone。</strong>
+					它们在安全隔区内生成且无法导出，我们不行，任何人都不行。换新手机意味着一套新密钥，而还在等旧手机的文件，任何人——包括我们——都解不开。这是设计本身的性质，不是事后能修复的故障。
 				</p>
 
 				<h2>可用性</h2>
 				<p>
-					Stolnk 由一个人开发和运维。我们不提供可用性承诺，因为兑现不了。我们确实承诺的是：月度额度用完时会暂停新的上传，而不会删除任何东西；并且永远不会在购买价之外额外扣费——Stolnk 里不存在能生成账单的机制。
+					Stolnk 由一个人开发和运维。我们不提供可用性承诺，因为兑现不了。我们确实承诺的是：月度额度用完时会暂停新的上传，而不会删除任何东西；并且永远不会在购买价之外额外收费。
 				</p>
 
 				<h2>如果我们哪天停止运营</h2>
 				<p>
-					一份依赖托管中转服务的永久授权，必须说清楚中转没了会怎样。所以：如果我们决定停止该服务，会通过邮件和本站至少提前
+					一个依赖托管中转服务的 App，必须说清楚中转没了会怎样。所以：如果我们决定停止该服务，会在 App 内和本站至少提前
 					<strong>90 天</strong>
-					告知，在此期间保持中转服务运行，并发布一个最终版本，使其中不依赖我们服务器的部分继续可用。如果我们在你购买后
-					<strong>12 个月</strong>内停止服务，我们退还你已支付的款项。
+					告知，并在此期间保持中转服务运行。已经在你 iPhone 上的文件会留在那里，仍然属于你。
 				</p>
 				<p>我们可能将本协议转让给业务受让方，条款不变。转让前会通知你。</p>
 
 				<h2>价格、税费与支付</h2>
 				<p>
-					在 iPhone App 中，Pro 由 Apple 通过 App Store 销售。该笔支付适用 Apple 的条款，退款请向 Apple 申请：
-					<a href="https://reportaproblem.apple.com">reportaproblem.apple.com</a>。本节其余内容适用于在本网站完成的购买。
-				</p>
-				<p>
-					Creem 是记录商户。你的买卖合同同时是与它订立的，本许可才是与我们订立的；支付本身适用它们的条款，增值税、商品服务税或销售税由它们处理，并可能在结账时按你所在地加收。
+					Stolnk 由 Apple 通过 App Store 销售。该笔支付适用 Apple 的条款，增值税、商品服务税或销售税由 Apple 处理。本网站不出售任何东西。
 				</p>
 				<p>我们可能随时调整新购买的价格。这不会改变你已经买到的东西。</p>
 
 				<h2>退款</h2>
 				<p>
-					14 天内无理由。发邮件到 <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>{" "}
-					就办好。退款会把该 Mac 退回免费版，并暂停第一个之外的收件箱。什么都不会被删除，重新购买后一切照旧回来。
+					退款由 Apple 处理，请在 <a href={REPORT_A_PROBLEM}>reportaproblem.apple.com</a>{" "}
+					申请。
 				</p>
-				<p>
-					如果你是享有法定解除权的消费者——例如在欧盟或英国——本条不取代它。我们的 14 天与你的法定权利有差异时，以对你更有利的一方为准。
-				</p>
+				<p>如果你是享有法定解除权或其他法定救济的消费者——例如在欧盟或英国——本条不取代这些权利。</p>
 
 				<h2>支持</h2>
-				<p>只走邮件，尽力而为。承诺一个我们做不到的响应时间，又会是这一页不该写的东西。</p>
+				<p>
+					发邮件到 <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>
+					，尽力而为。承诺一个我们做不到的响应时间，又会是这一页不该写的东西。
+				</p>
 
 				<h2>暂停与终止</h2>
 				<p>
-					你随时可以停止使用 Stolnk；删除 App 及其收件箱会按<a href="/privacy">隐私政策</a>
+					你随时可以停止使用 Stolnk；在 App 内删除账号会按<a href="/privacy">隐私政策</a>
 					所述清除你的数据。
 				</p>
 				<p>
-					对于严重违反或反复违反上述禁止事项的行为，我们可能暂停或终止授权。除非情节严重或法律要求立即处置，我们会先说明问题并给你合理的改正机会。如果我们因某项事后证明不成立的违规而终止了一份付费授权，我们予以恢复。
+					对于严重违反或反复违反上述禁止事项的行为，我们可能暂停或关闭账号、收件箱或链接。除非情节严重或法律要求立即处置，我们会先说明问题并给你合理的改正机会。如果事后证明违规不成立，我们会恢复被关闭的内容。
 				</p>
 
 				<h2>保证，以及你作为消费者的权利</h2>
-				<p>除本条另有规定外，本软件按其现状提供，不附带任何形式的保证。</p>
+				<p>除本条另有规定外，本软件和服务按其现状提供，不附带任何形式的保证。</p>
 				<p>
 					<strong>如果你是消费者，上述排除不剥夺你依法享有的任何权利</strong>
 					——包括要求数字内容与描述相符、适于用途、质量合格的权利，以及在不符合时的法定救济。无论本页其余部分怎么写，这些权利都成立。
@@ -1036,7 +973,7 @@ export const legalZh: typeof legalEn = {
 
 				<h2>条款变更</h2>
 				<p>
-					如发生实质变更，顶部的日期会更新，并且在能够联系到你的情况下，我们会在变更生效前告知。变更后继续使用 Stolnk 即表示接受新版本。如果你不愿意接受，请停止使用——若仍在退款期内，退款承诺依然有效。
+					如发生实质变更，顶部的日期会更新，并且在能够联系到你的情况下，我们会在变更生效前告知。变更后继续使用 Stolnk 即表示接受新版本。如果你不愿意接受，请停止使用。
 				</p>
 
 				<h2>适用法律与争议</h2>
@@ -1052,7 +989,7 @@ export const legalZh: typeof legalEn = {
 				<ul>
 					<li>如果某一条被认定不可执行，其余条款继续有效，该条按其能够成立的最小范围解释。</li>
 					<li>某一次没有主张权利，不等于放弃该权利。</li>
-					<li>本条款与隐私政策构成关于 Stolnk 的完整协议，取代此前的任何表述。</li>
+					<li>本条款、Apple 的许可协议与隐私政策构成关于 Stolnk 的完整协议，取代此前的任何表述。</li>
 					<li>
 						本页有中文和英文两个版本，两者力求表达同一含义；如有冲突，以中文版本为准。
 					</li>
@@ -1068,16 +1005,20 @@ export const legalZh: typeof legalEn = {
 	support: {
 		title: "支持",
 		updated: `最后更新于 ${UPDATED_ZH}`,
-		lede: "Stolnk Mac 版与 iPhone 版的帮助。只有一个邮箱，由真人阅读。",
+		lede: "Stolnk iPhone 版的帮助。只有一个邮箱，由真人阅读。",
 		body: (
 			<>
 				<h2>联系我们</h2>
 				<p>
-					发邮件到 <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>。请附上你的 Stolnk 名字；购买相关的问题请附上订单号或购买日期。我们通过邮件尽力答复，通常在几个工作日内。
+					发邮件到 <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>
+					。请附上你的 Stolnk 名字，以及问题发生时你在做什么。我们通过邮件尽力答复，通常在几个工作日内。
 				</p>
 
-				<h2>iPhone App</h2>
+				<h2>使用 App</h2>
 				<ul>
+					<li>
+						<strong>系统要求。</strong>iOS 17 及以上的 iPhone。
+					</li>
 					<li>
 						<strong>接收文件。</strong>先选一个名字，再在 App 里把一个文件夹变成收件地址。任何人在浏览器里打开这个地址就能给你发文件——对方无需安装 App，也无需注册。保持 App 打开或回到前台即可取回等待中的文件。
 					</li>
@@ -1085,18 +1026,19 @@ export const legalZh: typeof legalEn = {
 						<strong>发送文件。</strong>在「文件」里把一个文件分享为下载链接，可以设置有效期和下载次数，并可随时暂停、撤回或删除。
 					</li>
 					<li>
-						<strong>Pro 与恢复购买。</strong>Pro 是一次性的 App Store 购买。换了新 iPhone 或重新注册后，进入「我的 → 套餐」点「恢复购买」。App Store 的退款请向 Apple 申请：
-						<a href="https://reportaproblem.apple.com">reportaproblem.apple.com</a>。
+						<strong>购买与重新安装。</strong>Stolnk 是付费下载，包含全部功能，没有 App 内购买。换了新 iPhone，用同一个 Apple 账户在 App Store 免费重新下载即可。退款请向 Apple 申请：
+						<a href={REPORT_A_PROBLEM}>reportaproblem.apple.com</a>。
+					</li>
+					<li>
+						<strong>换手机。</strong>密钥无法迁移，所以换机之前先在旧手机上打开 Stolnk，把等待中的文件收完。
 					</li>
 					<li>
 						<strong>删除账号。</strong>「我的 → 删除账号」。立即释放你的名字，并删除我们为这台设备保存的全部数据，删除范围见<a href="/privacy">隐私政策</a>。
 					</li>
 				</ul>
 
-				<h2>Mac App</h2>
-				<p>
-					在<a href="/download">下载页</a>获取。在本网站购买的授权与退款问题，同样发到上面的邮箱。
-				</p>
+				<h2>其他平台</h2>
+				<p>Stolnk 只有 iPhone 版，没有 Mac、Windows 或安卓 App。给你发文件的人只需要一个浏览器。</p>
 
 				<h2>政策</h2>
 				<p>

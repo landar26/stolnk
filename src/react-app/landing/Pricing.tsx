@@ -1,6 +1,11 @@
+import { APP_STORE_URL } from "./contact.ts";
 import { useLang } from "./lang-context.ts";
 
-/** PRD 16.1. The two honesty rules that shape every line of this are in `copy-pages.tsx`. */
+/**
+ * One price, paid to Apple. Nothing is sold on this website: the iPhone app is
+ * a paid download with every feature included, so this page only says what
+ * that price buys. The numbers are the `PRO` tier in `worker/limits.ts`.
+ */
 export function Pricing() {
 	const { t } = useLang();
 	const copy = t.pages.pricing;
@@ -10,44 +15,25 @@ export function Pricing() {
 			<h1 className="inbox-title">{copy.title}</h1>
 			<p>{copy.lede}</p>
 
-			<div className="plans">
-				<div className="plan">
-					<h2>{copy.freeName}</h2>
-					<p className="price">{copy.freePrice}</p>
-					<p className="plan-note">{copy.freeNote}</p>
-					<a className="button" href="/download">
-						{copy.freeCta}
-					</a>
-				</div>
-
+			<div className="plans single">
 				<div className="plan featured">
-					<h2>{copy.proName}</h2>
-					<p className="price">
-						$29 <s>$39</s>
-					</p>
-					<p className="plan-note">{copy.proNote}</p>
-					<a className="button primary" href="/api/v1/checkout">
-						{copy.proCta}
+					<h2>{copy.planName}</h2>
+					<p className="price">{copy.price}</p>
+					<p className="plan-note">{copy.planNote}</p>
+					<a className="button primary" href={APP_STORE_URL}>
+						{copy.cta}
 					</a>
-					<small>{copy.proFootnote}</small>
+					<small>{copy.footnote}</small>
 				</div>
 			</div>
 
 			<div className="table-scroll">
 				<table className="compare">
-					<thead>
-						<tr>
-							<th />
-							<th>{copy.freeName}</th>
-							<th>{copy.proName}</th>
-						</tr>
-					</thead>
 					<tbody>
 						{copy.rows.map((row) => (
 							<tr key={row.label}>
 								<th scope="row">{row.label}</th>
-								<td>{row.free}</td>
-								<td>{row.pro}</td>
+								<td>{row.value}</td>
 							</tr>
 						))}
 					</tbody>

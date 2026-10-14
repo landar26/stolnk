@@ -1,4 +1,4 @@
-import { COMPANY_EN, COMPANY_ZH } from "./contact.ts";
+import { SUPPORT_EMAIL } from "./contact.ts";
 
 /**
  * The long-form prose pages, in both languages.
@@ -13,87 +13,65 @@ import { COMPANY_EN, COMPANY_ZH } from "./contact.ts";
  */
 
 /*
- * PRD 16.1 — the price list. Two rules from PRD 16.3 shape every line of the
- * pricing copy below, and both are honesty constraints rather than marketing
- * ones:
+ * The price list. Stolnk is an iPhone app sold as a paid download, so every
+ * row below is the `PRO` tier in `worker/limits.ts` — installing the app is
+ * what grants it (`routes/licenses.ts`, `/apple/app`). Two honesty rules still
+ * shape the copy:
  *
- *  1. **The word "unlimited" does not appear.** What is sold is a perpetual
- *     licence, every V1.x update, and 300 GB of relay a month — a number the
- *     cost model in PRD 8.6 can honour forever. A "lifetime everything" that
- *     later has to be walked back is the standard way this kind of product
- *     breaks its word.
- *  2. **Nothing is listed that does not exist yet.** Link expiry and delivery
- *     webhooks are on the V1.1 roadmap, so they appear under what the purchase
- *     will grow into — the roadmap section on the home page — not as a row in
- *     the table someone is paying for today.
+ *  1. **The word "unlimited" does not appear.** What is sold is the app, every
+ *     V1.x update, and 300 GB of relay a month — a number a one-time payment
+ *     can honour forever.
+ *  2. **Nothing is listed that does not exist yet.** Unbuilt features sit on
+ *     the roadmap on the home page, not as a row in the table someone is
+ *     paying for today.
  *
- *     Password protection is the awkward one. PRD 16.1 lists it as a headline
- *     Pro capability and the server enforces it as one — but the Mac app can
- *     only display that a link has a password, not set it, so a buyer today
- *     cannot switch it on. It sits with the roadmap items until that UI
- *     exists, at which point it moves up into the table.
- *
- * The free column is likewise stated as what it is. PRD 16.2 argued the free
- * tier could be generous because LAN direct costs nothing to serve, and it now
- * exists (PRD 8.2) — but the allowance is still the honest headline number.
- * Whether a given transfer takes the local path is decided by the network, not
- * by the sender or by us, so "3 GB of relayed files a month" is the promise
- * that holds in every case; a same-Wi-Fi transfer being free on top of it is a
- * thing people discover, not a thing they are asked to plan around.
+ * Nothing is sold on this website. Keep it that way: App Review treats a
+ * second place to buy the same features as content bought outside the app.
  */
 
 export const pagesEn = {
 	download: {
-		title: "Download Stolnk",
-		lede: "macOS 13 or later, Apple Silicon and Intel. Free — one inbox, 3 GB of relayed files a month.",
+		title: "Get Stolnk for iPhone",
+		lede: "iPhone, iOS 17 or later. A paid download on the App Store — every feature included, with no in-app purchases and no subscription.",
 		pricingLink: "Pricing",
-		cta: "Download for Mac",
-		meta: (version: string, size: string, minMacos: string) =>
-			`Version ${version} · ${size} · macOS ${minMacos} or later`,
-		unavailable: "No build is published right now — please check back shortly.",
+		cta: "Download on the App Store",
+		meta: "$1.99 · iPhone · iOS 17 or later",
 		firstLaunch: "First launch",
 		firstLaunchBody: (
-			<>
-				<p>
-					Stolnk is distributed directly rather than through the App Store, because it writes
-					to folders you choose anywhere on disk — including external volumes — which the
-					sandbox does not allow.
-				</p>
-				<p>
-					Released builds are signed with a Developer ID and notarised by Apple, so the disk
-					image opens without a warning and so does the app. Drag Stolnk to Applications and
-					double-click it.
-				</p>
-			</>
-		),
-		gatekeeper: (
-			<>
-				macOS shows one dialog the first time — the ordinary “downloaded from the Internet”
-				confirmation every direct download gets. It names the signer:{" "}
-				<strong>{COMPANY_EN}</strong>, the company behind Stolnk.
-			</>
-		),
-		verify: "Verify what you downloaded",
-		verifyBody: "The hash of every published build is listed here, so you can check that the file you got is the file we shipped.",
-		verifyWhy: "Why that matters →",
-		onYourMac: "What it does on your Mac",
-		onYourMacBody: (
-			<ul>
-				<li>Lives in the menu bar. No Dock icon, no window unless you open one.</li>
-				<li>Generates its keys in the Secure Enclave on first launch.</li>
-				<li>Writes only to the folders you pick.</li>
+			<ol>
 				<li>
-					Marks every received file with <code>com.apple.quarantine</code>, exactly as a
-					browser download would.
+					Pick a name. That is your whole identity — there is no sign-in, no email and no
+					password.
 				</li>
-				<li>Does not keep your Mac awake.</li>
+				<li>
+					Choose a folder and give it a path. You now have an address like{" "}
+					<code>yourname.stolnk.com/clients</code>.
+				</li>
+				<li>
+					Send the address to anyone, or show it as a QR code. Files sent to it land in that
+					folder.
+				</li>
+				<li>
+					If iOS asks for local network access, allowing it lets a sender on the same Wi-Fi
+					reach your iPhone directly. Stolnk works without it.
+				</li>
+			</ol>
+		),
+		onYourPhone: "What it does on your iPhone",
+		onYourPhoneBody: (
+			<ul>
+				<li>Generates its keys in the Secure Enclave on first launch.</li>
+				<li>Keeps received files inside the app's own storage, in the folders you made.</li>
+				<li>Collects files that waited while you were offline the next time you open it.</li>
+				<li>Has no advertising, no analytics SDK and no tracking.</li>
+				<li>Lets you delete your account, and everything we hold for it, from inside the app.</li>
 			</ul>
 		),
 	},
 
 	howItWorks: {
 		title: "How Stolnk works",
-		lede: "Files are encrypted in the sender's browser and can only be decrypted by your Mac. We can't read them — not in transit, not at rest.",
+		lede: "Files are encrypted in the sender's browser and can only be decrypted by your iPhone. We can't read them — not in transit, not at rest.",
 		/*
 		 * PRD 9.4 — the honest description of what this encryption does and does
 		 * not do. The claims here are deliberately narrower than the marketing
@@ -107,27 +85,36 @@ export const pagesEn = {
 				<h2>The path a file takes</h2>
 				<p>
 					When someone opens your link, their browser asks our server for one thing: your
-					Mac's public key. It generates a one-time key for the file, encrypts the file with
-					it, and wraps that key so that only your Mac's private key can unwrap it.
+					iPhone's public key. It generates a one-time key for the file, encrypts the file
+					with it, and wraps that key so that only your iPhone's private key can unwrap it.
 				</p>
 				<p>
-					The encrypted bytes are held briefly in object storage. Your Mac collects them, and
-					the stored copy is deleted the moment it confirms the file landed. If your Mac is
-					asleep, they wait — up to the inbox's expiry — and are delivered when it wakes.
+					The encrypted bytes are held briefly in object storage. Your iPhone collects them,
+					and the stored copy is deleted the moment it confirms the file landed. If your
+					iPhone is offline or Stolnk is not open, they wait — up to 7 days — and are
+					delivered the next time it is.
+				</p>
+
+				<h2>On the same Wi-Fi</h2>
+				<p>
+					When the sender is on the same network as your iPhone, the same ciphertext goes
+					straight to the phone instead. Our server only helps the two find each other; not
+					one byte of the file reaches us. Whether that happens is decided by the network,
+					and nothing else changes.
 				</p>
 
 				<h2>What the keys are</h2>
 				<p>
-					Your Mac generates two P-256 keypairs inside its <strong>Secure Enclave</strong> on
-					first launch: one to prove its identity to our server, one to unwrap file keys. The
-					private halves never enter memory, never touch disk, and cannot be exported — by
-					us, by the app, or by anyone with access to the machine's storage.
+					Your iPhone generates two P-256 keypairs inside its <strong>Secure Enclave</strong>{" "}
+					on first launch: one to prove its identity to our server, one to unwrap file keys.
+					The private halves never leave it and cannot be exported — by us, by the app, or by
+					anyone with access to the phone's storage.
 				</p>
 				<p>
 					The direct consequence, stated plainly:{" "}
-					<strong>keys cannot move to a new Mac.</strong> Setting up a new machine means new
-					keys. Anything still waiting for the old Mac becomes undecryptable, so clear your
-					queue before you switch.
+					<strong>keys cannot move to a new iPhone.</strong> Setting up a new phone means new
+					keys. Anything still waiting for the old one becomes undecryptable, so open Stolnk
+					on the old phone and collect everything before you switch.
 				</p>
 
 				<h2>What we can see</h2>
@@ -135,7 +122,7 @@ export const pagesEn = {
 				<ul>
 					<li>The size of each file, and when it was sent.</li>
 					<li>Which inbox it was addressed to.</li>
-					<li>Your Mac's public keys.</li>
+					<li>Your iPhone's public keys.</li>
 				</ul>
 				<p>We cannot read:</p>
 				<ul>
@@ -144,7 +131,7 @@ export const pagesEn = {
 						Filenames — they are encrypted too, though their <em>length</em> can be inferred
 						from the ciphertext.
 					</li>
-					<li>The folder on your Mac a file lands in. We never learn your local paths.</li>
+					<li>Which folder in the app a file lands in.</li>
 				</ul>
 
 				<h2>The limitation we will not hide</h2>
@@ -165,10 +152,6 @@ export const pagesEn = {
 						is a realistic afternoon rather than a project.
 					</li>
 					<li>The sending code is open source and auditable.</li>
-					<li>
-						The Mac app's hash is published on the <a href="/download">download page</a>, so
-						you can check the installer you got is the one we shipped.
-					</li>
 				</ul>
 				<p>
 					None of that turns the limitation into a guarantee. It narrows it. A file that must
@@ -183,30 +166,31 @@ export const pagesEn = {
 					scripts, build jobs and AI agents cannot run the encryption a browser runs.{" "}
 					<strong>
 						On that route the file arrives at our server as plaintext, and our server builds
-						the envelope with your Mac&rsquo;s public key.
+						the envelope with your iPhone&rsquo;s public key.
 					</strong>{" "}
-					Your Mac cannot tell the two apart and does not need to: what it receives, and what
-					it alone can open, is identical either way.
+					Your iPhone cannot tell the two apart and does not need to: what it receives, and
+					what it alone can open, is identical either way.
 				</p>
 				<p>
-					A file shared outward from the Mac is the other deliberate exception. It is
-					stored in plaintext so any browser can download it; Stolnk can read it until
-					the link expires, is spent or is revoked. The creation and download screens
-					state this at the point it matters.
+					A file shared outward from the iPhone as a download link is the other deliberate
+					exception. It is stored in plaintext so any browser can download it; Stolnk can
+					read it until the link expires, is spent or is revoked. The app says so at the
+					point you create the link.
 				</p>
 				<p>
-					What differs is one request&rsquo;s worth of exposure. The bytes exist in our
-					server&rsquo;s memory in the clear for as long as it takes to encrypt them, and are
-					written nowhere in that form. That is a real difference from the paragraph above
-					rather than a footnote to it, which is why it is here instead of left to be
-					discovered — if it matters for a particular file, send that file through the page.
+					For the terminal route, what differs is one request&rsquo;s worth of exposure. The
+					bytes exist in our server&rsquo;s memory in the clear for as long as it takes to
+					encrypt them, and are written nowhere in that form. That is a real difference
+					rather than a footnote, which is why it is here instead of left to be discovered —
+					if it matters for a particular file, send that file through the page.
 				</p>
 
 				<h2>Things we deliberately do not say</h2>
 				<p>
 					Not "zero knowledge" — we know file sizes and timing. Not "your files never touch
 					our servers" — the encrypted bytes do, briefly, and that is exactly what lets them
-					arrive while your Mac is asleep. Not "military-grade" — that phrase means nothing.
+					arrive while your phone is offline. Not "military-grade" — that phrase means
+					nothing.
 				</p>
 			</>
 		),
@@ -214,23 +198,20 @@ export const pagesEn = {
 
 	pricing: {
 		title: "One price. Paid once.",
-		lede: "Stolnk is a one-time purchase from a single developer. There is no subscription, and no plan that expires.",
-		freeName: "Free",
-		freePrice: "$0",
-		freeNote: "One inbox and 3 GB of relayed files a month. Enough to use properly, and enough to see your Mac collect something it slept through.",
-		freeCta: "Download for Mac",
-		proName: "Pro",
-		proNote: "Launch price for the first 500. After that it is $39 — the long-term price, not a discount that comes back.",
-		proCta: "Buy Stolnk Pro",
-		proFootnote: "One payment. Yours permanently.",
+		lede: "Stolnk is a paid download on the App Store, from a single developer. Every feature is included from the moment you install — no in-app purchases, no subscription, no plan that expires.",
+		planName: "Stolnk for iPhone",
+		price: "$1.99",
+		planNote: "Paid once, on the App Store. Everything in the table below is included.",
+		cta: "Download on the App Store",
+		footnote: "US price. The App Store shows the price for your country.",
 		rows: [
-			{ label: "Inboxes", free: "1", pro: "As many as you like" },
-			{ label: "Outbound share links", free: "1", pro: "100" },
-			{ label: "Relayed files", free: "3 GB / month", pro: "300 GB / month" },
-			{ label: "Largest single file", free: "2 GB", pro: "20 GB" },
-			{ label: "Held while your Mac sleeps", free: "24 hours", pro: "7 days" },
-			{ label: "Macs", free: "1", pro: "3" },
-			{ label: "Updates", free: "All of V1.x", pro: "All of V1.x" },
+			{ label: "Inbox addresses", value: "As many as you like" },
+			{ label: "Largest single file", value: "20 GB" },
+			{ label: "Relayed files", value: "300 GB / month" },
+			{ label: "Held while your phone is offline", value: "7 days" },
+			{ label: "Download links", value: "Up to 100, each lasting up to 30 days" },
+			{ label: "Passwords on addresses and links", value: "Included" },
+			{ label: "Updates", value: "All of V1.x" },
 		],
 		body: (
 			<>
@@ -240,24 +221,22 @@ export const pagesEn = {
 					cannot be kept is worse than a smaller one that can, so here is the whole of it:
 				</p>
 				<ul>
-					<li>A permanent licence to the software, on up to 3 Macs.</li>
+					<li>The app, on the iPhones your Apple Account can download it to.</li>
 					<li>Every V1.x update.</li>
 					<li>300 GB of relayed files per month, for as long as Stolnk runs.</li>
 				</ul>
 				<p>
 					That is a number rather than the word "unlimited" on purpose. Relaying costs real
 					money per gigabyte, and 300 GB a month is an amount a one-time payment can carry
-					indefinitely. If Stolnk ever reaches a V2 with genuinely new capabilities, it will
-					be a paid upgrade at half price — and your V1 licence and allowance keep working
-					whether or not you take it.
+					indefinitely. Transfers on the same Wi-Fi go directly to your iPhone and do not
+					count against it.
 				</p>
 
 				<h2>Running out</h2>
 				<p>
 					Nothing is ever billed on top, and your inbox never goes down. If a month's
 					allowance runs out, links stop accepting new files and start again when the month
-					turns over. You will not get a surprise invoice, because there is no mechanism in
-					Stolnk that could produce one.
+					turns over. There are no in-app purchases, so there is nothing to upsell you to.
 				</p>
 
 				<h2>Coming in V1.x, included</h2>
@@ -269,64 +248,11 @@ export const pagesEn = {
 
 				<h2>Refunds and support</h2>
 				<p>
-					14 days, no questions — email and it is done. Support is email only and
+					The App Store handles payment and refunds: request one from Apple at{" "}
+					<a href="https://reportaproblem.apple.com">reportaproblem.apple.com</a>. Support
+					is by email at <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>, and
 					best-effort: Stolnk is one person, and promising more than that would be another
 					thing that could not be kept.
-				</p>
-			</>
-		),
-	},
-
-	/*
-	 * Where Creem sends the buyer after payment (PRD 16.5).
-	 *
-	 * This page grants nothing and checks nothing. Creem appends `checkout_id`,
-	 * `order_id`, `customer_id`, `product_id` and a `signature` to the return
-	 * URL, and the signature is an HMAC under the API key — which by the argument
-	 * in `worker/lib/creem.ts` cannot exist in a browser bundle, because a key
-	 * inside something anyone can download is a public key. So the parameters are
-	 * not read at all: verifying them here would be theatre, and the real record
-	 * of the sale arrives independently on the webhook, which is signed with a
-	 * secret that never leaves the Worker.
-	 *
-	 * What is left for this page to do is the thing the buyer actually needs at
-	 * this moment, which is to know where their licence key is.
-	 */
-	thanks: {
-		title: "Thank you — you have Stolnk Pro.",
-		lede: "The payment went through. Your licence key is in the confirmation Creem just showed you, and a copy is on its way to the email address you paid with.",
-		activate: "Turning it on",
-		activateBody: (
-			<>
-				<ol>
-					<li>
-						Open Stolnk from the menu bar and choose <strong>Settings → Licence</strong>.
-					</li>
-					<li>Paste the key and click Activate.</li>
-				</ol>
-				<p>
-					That is the whole of it — there is no account to create, and nothing to sign in
-					to. The key covers up to three Macs, so repeat it on each one; releasing a Mac
-					later frees its seat for another.
-				</p>
-			</>
-		),
-		cta: "Download for Mac",
-		rest: (
-			<>
-				<h2>If the key has not arrived</h2>
-				<p>
-					Check spam first — it arrives within a minute or two. If it is genuinely missing,
-					email and it will be resent; the order exists on Creem's side whether or not the
-					message reached you.
-				</p>
-
-				<h2>Refunds</h2>
-				<p>
-					14 days, no questions — email and it is done, exactly as{" "}
-					<a href="/pricing">the pricing page</a> says. A refund puts this Mac back on Free
-					and pauses any inbox beyond the first. Nothing is deleted, and buying again brings
-					it all back as it was.
 				</p>
 			</>
 		),
@@ -351,67 +277,62 @@ export const pagesEn = {
 
 export const pagesZh: typeof pagesEn = {
 	download: {
-		title: "下载 Stolnk",
-		lede: "需要 macOS 13 及以上，Apple 芯片和 Intel 都支持。免费版包含一个收件箱、每月 3 GB 中转流量。",
+		title: "获取 Stolnk iPhone 版",
+		lede: "适用于 iPhone，需要 iOS 17 及以上。App Store 付费下载——全部功能都包含在内，没有内购，也没有订阅。",
 		pricingLink: "查看定价",
-		cta: "下载 Mac 版",
-		meta: (version: string, size: string, minMacos: string) =>
-			`版本 ${version} · ${size} · 需要 macOS ${minMacos} 及以上`,
-		unavailable: "目前还没有已发布的构建，请稍后再来。",
+		cta: "在 App Store 下载",
+		meta: "$1.99 · iPhone · iOS 17 及以上",
 		firstLaunch: "第一次打开",
 		firstLaunchBody: (
-			<>
-				<p>
-					Stolnk 通过官网直接分发，没有上架 App Store。原因是它需要往你自己指定的文件夹里写入文件——包括外接硬盘上的——这是沙盒不允许的。
-				</p>
-				<p>
-					正式发布的构建都用 Developer ID 签名并经过 Apple 公证，所以磁盘映像和 App 打开时都不会有警告。把 Stolnk 拖进「应用程序」，双击即可。
-				</p>
-			</>
-		),
-		gatekeeper: (
-			<>
-				macOS 第一次会弹一个对话框——就是所有官网下载都会遇到的那句「来自互联网」的确认。它会显示签名方：
-				<strong>{COMPANY_ZH}</strong>，也就是 Stolnk 背后的公司。
-			</>
-		),
-		verify: "校验你下载到的文件",
-		verifyBody: "每个已发布构建的哈希都列在这里，你可以核对拿到的文件是否就是我们发出的那一份。",
-		verifyWhy: "为什么这件事重要 →",
-		onYourMac: "它在你 Mac 上做什么",
-		onYourMacBody: (
-			<ul>
-				<li>常驻菜单栏。没有 Dock 图标，不主动开窗口。</li>
-				<li>首次启动时在 Secure Enclave 里生成密钥。</li>
-				<li>只往你选定的文件夹里写。</li>
+			<ol>
+				<li>起一个名字。这就是你的全部身份——没有登录，没有邮箱，也没有密码。</li>
 				<li>
-					给每个收到的文件打上 <code>com.apple.quarantine</code> 标记，和浏览器下载的行为完全一致。
+					选一个文件夹，给它配一段路径。你就有了一个形如 <code>yourname.stolnk.com/clients</code>{" "}
+					的地址。
 				</li>
-				<li>不会阻止你的 Mac 进入睡眠。</li>
+				<li>把地址发给任何人，或者显示成二维码。发到这个地址的文件会落进那个文件夹。</li>
+				<li>
+					如果 iOS 询问本地网络权限，允许之后，同一 Wi-Fi 下的发送方可以直接连到你的 iPhone。不允许也照样能用。
+				</li>
+			</ol>
+		),
+		onYourPhone: "它在你 iPhone 上做什么",
+		onYourPhoneBody: (
+			<ul>
+				<li>首次启动时在安全隔区里生成密钥。</li>
+				<li>收到的文件保存在 App 自己的存储空间里，放在你建的文件夹中。</li>
+				<li>你离线期间在等待的文件，下次打开时自动取回。</li>
+				<li>没有广告，没有统计 SDK，没有追踪。</li>
+				<li>可以在 App 内删除账号，以及我们为它保存的全部数据。</li>
 			</ul>
 		),
 	},
 
 	howItWorks: {
 		title: "Stolnk 是怎么工作的",
-		lede: "文件在发送方的浏览器里就已加密，只有你的 Mac 能解开。我们读不到内容——传输中读不到，存着的时候也读不到。",
+		lede: "文件在发送方的浏览器里就已加密，只有你的 iPhone 能解开。我们读不到内容——传输中读不到，存着的时候也读不到。",
 		body: (
 			<>
 				<h2>一个文件走过的路</h2>
 				<p>
-					别人打开你的链接时，他的浏览器只向我们的服务器要一样东西：你 Mac 的公钥。浏览器为这个文件生成一把一次性密钥，用它加密文件，再把这把密钥包起来——只有你 Mac 的私钥能解开。
+					别人打开你的链接时，他的浏览器只向我们的服务器要一样东西：你 iPhone 的公钥。浏览器为这个文件生成一把一次性密钥，用它加密文件，再把这把密钥包起来——只有你 iPhone 的私钥能解开。
 				</p>
 				<p>
-					密文会在对象存储里短暂停留。你的 Mac 取走它，确认落盘之后，存储里那份副本立刻删除。如果你的 Mac 正在睡觉，密文就等着——不超过收件箱的保留期——等它醒来再送达。
+					密文会在对象存储里短暂停留。你的 iPhone 取走它，确认收到之后，存储里那份副本立刻删除。如果你的 iPhone 离线或者没打开 Stolnk，密文就等着——最多 7 天——等下次上线时再送达。
+				</p>
+
+				<h2>在同一个 Wi-Fi 下</h2>
+				<p>
+					发送方和你的 iPhone 在同一个网络时，同样的密文会直接发到手机上。我们的服务器只负责让两边找到彼此，文件没有一个字节经过我们。走不走这条路由网络决定，其余一切不变。
 				</p>
 
 				<h2>密钥是什么</h2>
 				<p>
-					你的 Mac 在首次启动时于 <strong>Secure Enclave</strong> 内生成两对 P-256 密钥：一对用于向服务器证明身份，一对用于解开文件密钥。私钥那一半从不进入内存、从不落盘，也无法导出——我们不能，App 不能，能接触到这台机器存储的人也不能。
+					你的 iPhone 在首次启动时于<strong>安全隔区（Secure Enclave）</strong>内生成两对 P-256 密钥：一对用于向服务器证明身份，一对用于解开文件密钥。私钥那一半从不离开安全隔区，也无法导出——我们不能，App 不能，能接触到这台手机存储的人也不能。
 				</p>
 				<p>
-					由此直接带来的后果，说白了就是：<strong>密钥没法迁移到新 Mac。</strong>
-					换新机器意味着一套新密钥，还在等旧 Mac 的文件会变得无法解密。所以换机之前先把队列清空。
+					由此直接带来的后果，说白了就是：<strong>密钥没法迁移到新 iPhone。</strong>
+					换新手机意味着一套新密钥，还在等旧手机的文件会变得无法解密。所以换机之前，先在旧手机上打开 Stolnk 把文件收完。
 				</p>
 
 				<h2>我们能看到什么</h2>
@@ -419,7 +340,7 @@ export const pagesZh: typeof pagesEn = {
 				<ul>
 					<li>每个文件的大小，以及发送时间。</li>
 					<li>它发往哪个收件箱。</li>
-					<li>你 Mac 的公钥。</li>
+					<li>你 iPhone 的公钥。</li>
 				</ul>
 				<p>我们读不到：</p>
 				<ul>
@@ -427,7 +348,7 @@ export const pagesZh: typeof pagesEn = {
 					<li>
 						文件名——它同样是加密的，不过从密文长度可以推断出名字的<em>长度</em>。
 					</li>
-					<li>文件最终落在你 Mac 上的哪个文件夹。我们从不知道你的本地路径。</li>
+					<li>文件落在 App 里的哪个文件夹。</li>
 				</ul>
 
 				<h2>我们不打算掩饰的那个局限</h2>
@@ -442,9 +363,6 @@ export const pagesZh: typeof pagesEn = {
 					<li>严格的内容安全策略，不允许任何内联脚本或内联样式。</li>
 					<li>发送页有自己独立的打包产物，小到「花一个下午读完」是现实的，而不是一个项目。</li>
 					<li>发送端代码开源，可供审计。</li>
-					<li>
-						Mac App 的哈希公布在<a href="/download">下载页</a>上，你可以核对拿到的安装包是否就是我们发出的那份。
-					</li>
 				</ul>
 				<p>
 					这些都没有把局限变成保证，只是把它收窄了。如果某个文件绝对不能被除你之外的任何人读到，那它应该在进入任何浏览器之前就已经加密。
@@ -455,19 +373,19 @@ export const pagesZh: typeof pagesEn = {
 					收件地址同时也能在终端里用——
 					<code>curl -F &quot;file=@photo.jpg&quot; ryan.stolnk.com/client-a</code>
 					——因为脚本、构建任务和 AI agent 跑不了浏览器跑的那套加密。
-					<strong>走这条路时，文件是以明文到达我们服务器的，再由我们的服务器用你 Mac 的公钥封装。</strong>{" "}
-					你的 Mac 分辨不出这两者，也不需要分辨：它收到的、并且只有它能打开的那份东西，两条路完全一样。
+					<strong>走这条路时，文件是以明文到达我们服务器的，再由我们的服务器用你 iPhone 的公钥封装。</strong>{" "}
+					你的 iPhone 分辨不出这两者，也不需要分辨：它收到的、并且只有它能打开的那份东西，两条路完全一样。
 				</p>
 				<p>
-					从 Mac 向外分享文件是另一个刻意的例外。为了让任意浏览器都能下载，文件以明文存放；在链接过期、次数用完或被撤销之前，Stolnk 能够读取它。创建页和下载页都会在真正相关的位置写明这一点。
+					从 iPhone 以下载链接向外分享文件是另一个刻意的例外。为了让任意浏览器都能下载，文件以明文存放；在链接过期、次数用完或被撤销之前，Stolnk 能够读取它。App 会在你创建链接时写明这一点。
 				</p>
 				<p>
-					不一样的是一次请求那么长的暴露窗口。字节以明文形式存在于我们服务器的内存里，直到加密完成为止，并且从不以那种形式写到任何地方。这跟上面一段是实打实的区别，不是它的脚注——所以写在这里，而不是留给人自己发现。如果某个文件在意这一点，那个文件就走页面发。
+					终端这条路不一样的是一次请求那么长的暴露窗口。字节以明文形式存在于我们服务器的内存里，直到加密完成为止，并且从不以那种形式写到任何地方。这是实打实的区别，不是脚注——所以写在这里，而不是留给人自己发现。如果某个文件在意这一点，那个文件就走页面发。
 				</p>
 
 				<h2>我们刻意不说的话</h2>
 				<p>
-					不说「零知识」——我们知道文件大小和时间。不说「你的文件从不经过我们的服务器」——密文确实经过，只是很短暂，而这恰恰是它能在你 Mac 睡觉时照样送达的原因。不说「军用级加密」——这个词没有任何含义。
+					不说「零知识」——我们知道文件大小和时间。不说「你的文件从不经过我们的服务器」——密文确实经过，只是很短暂，而这恰恰是它能在你手机离线时照样送达的原因。不说「军用级加密」——这个词没有任何含义。
 				</p>
 			</>
 		),
@@ -475,23 +393,20 @@ export const pagesZh: typeof pagesEn = {
 
 	pricing: {
 		title: "一个价格，只付一次。",
-		lede: "Stolnk 是一位独立开发者的一次性买断产品。没有订阅，也没有会到期的套餐。",
-		freeName: "免费版",
-		freePrice: "$0",
-		freeNote: "一个收件箱，每月 3 GB 中转流量。足够正经用起来，也足够让你看到 Mac 把睡过去时错过的东西补收回来。",
-		freeCta: "下载 Mac 版",
-		proName: "专业版",
-		proNote: "前 500 位的发布价。之后是 $39——那是长期价格，不是会再回来的折扣。",
-		proCta: "购买 Stolnk Pro",
-		proFootnote: "付一次，永久属于你。",
+		lede: "Stolnk 是一位独立开发者在 App Store 上的付费下载应用。安装即享全部功能——没有内购，没有订阅，也没有会到期的套餐。",
+		planName: "Stolnk iPhone 版",
+		price: "$1.99",
+		planNote: "在 App Store 付一次钱。下表所列全部包含在内。",
+		cta: "在 App Store 下载",
+		footnote: "美区价格。App Store 会显示你所在国家或地区的价格。",
 		rows: [
-			{ label: "收件箱数量", free: "1 个", pro: "不限个数" },
-			{ label: "对外分享链接", free: "1 个", pro: "100 个" },
-			{ label: "中转流量", free: "3 GB / 月", pro: "300 GB / 月" },
-			{ label: "单文件上限", free: "2 GB", pro: "20 GB" },
-			{ label: "Mac 睡眠时的保留时长", free: "24 小时", pro: "7 天" },
-			{ label: "可用 Mac 台数", free: "1 台", pro: "3 台" },
-			{ label: "版本更新", free: "全部 V1.x", pro: "全部 V1.x" },
+			{ label: "收件地址", value: "不限个数" },
+			{ label: "单文件上限", value: "20 GB" },
+			{ label: "中转流量", value: "300 GB / 月" },
+			{ label: "手机离线时的保留时长", value: "7 天" },
+			{ label: "下载链接", value: "最多 100 个，每个最长 30 天" },
+			{ label: "地址和链接设密码", value: "包含" },
+			{ label: "版本更新", value: "全部 V1.x" },
 		],
 		body: (
 			<>
@@ -500,17 +415,17 @@ export const pagesZh: typeof pagesEn = {
 					把这件事说准，比听上去更要紧。一个兑现不了的永久承诺，比一个更小但能兑现的承诺更糟。所以全部内容如下：
 				</p>
 				<ul>
-					<li>软件的永久授权，最多 3 台 Mac。</li>
+					<li>这个 App，可以装在你的 Apple 账户能下载到的 iPhone 上。</li>
 					<li>全部 V1.x 更新。</li>
 					<li>每月 300 GB 中转流量，只要 Stolnk 还在运行就一直有效。</li>
 				</ul>
 				<p>
-					这里写的是一个具体数字而不是「无限」，是刻意的。中转按 GB 计算是真金白银的成本，而每月 300 GB 是一次性付款能够长期扛住的量。如果 Stolnk 将来真的做出了能力上有实质变化的 V2，那会是一次半价的付费升级——而且不管你升不升，你的 V1 授权和额度都继续有效。
+					这里写的是一个具体数字而不是「无限」，是刻意的。中转按 GB 计算是真金白银的成本，而每月 300 GB 是一次性付款能够长期扛住的量。同一 Wi-Fi 下的传输直接到你的 iPhone，不计入额度。
 				</p>
 
 				<h2>额度用完之后</h2>
 				<p>
-					永远不会额外扣费，你的收件箱也不会下线。如果某个月的额度用完了，链接会停止接收新文件，等到下个月自然恢复。你不会收到意料之外的账单——因为 Stolnk 里根本不存在能生成账单的机制。
+					永远不会额外扣费，你的收件箱也不会下线。如果某个月的额度用完了，链接会停止接收新文件，等到下个月自然恢复。App 里没有内购，所以也没有什么可以向你追加推销的。
 				</p>
 
 				<h2>V1.x 内会做、且已包含</h2>
@@ -520,40 +435,10 @@ export const pagesZh: typeof pagesEn = {
 
 				<h2>退款与支持</h2>
 				<p>
-					14 天内无理由退款——发封邮件就办好。支持只走邮件，且是尽力而为：Stolnk 只有一个人，承诺得比这更多，就又是一件兑现不了的事。
-				</p>
-			</>
-		),
-	},
-
-	thanks: {
-		title: "谢谢——你已经是 Stolnk Pro 用户了。",
-		lede: "付款已完成。你的授权码就在 Creem 刚才显示的确认页上，同时也正在发往你付款时用的邮箱。",
-		activate: "怎么激活",
-		activateBody: (
-			<>
-				<ol>
-					<li>
-						从菜单栏打开 Stolnk，选择 <strong>设置 → 授权</strong>。
-					</li>
-					<li>粘贴授权码，点击「激活」。</li>
-				</ol>
-				<p>
-					就这些——不用注册账号，也没有什么要登录的。一个授权码最多覆盖三台 Mac，在每台上重复一次即可；之后释放某台 Mac，它占的席位就会空出来给另一台。
-				</p>
-			</>
-		),
-		cta: "下载 Mac 版",
-		rest: (
-			<>
-				<h2>如果没收到授权码</h2>
-				<p>
-					先看垃圾邮件——正常一两分钟内就会到。如果确实没有，发邮件给我们会重发一次；不管那封信有没有送到你手上，订单在 Creem 那边都是存在的。
-				</p>
-
-				<h2>退款</h2>
-				<p>
-					14 天内无理由退款——发封邮件就办好，和<a href="/pricing">定价页</a>写的完全一致。退款会把这台 Mac 退回免费版，并暂停第一个之外的收件箱。什么都不会被删除，重新购买后一切照旧回来。
+					付款和退款都由 App Store 处理：请在{" "}
+					<a href="https://reportaproblem.apple.com">reportaproblem.apple.com</a>{" "}
+					向 Apple 申请。支持走邮件 <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>
+					，尽力而为：Stolnk 只有一个人，承诺得比这更多，就又是一件兑现不了的事。
 				</p>
 			</>
 		),

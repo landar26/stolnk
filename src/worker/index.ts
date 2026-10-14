@@ -17,19 +17,16 @@ import { verifyToken, type DeviceToken, type SignalToken, type UploadToken } fro
 import { requireAdmin } from "./lib/admin";
 import { admin } from "./routes/admin";
 import { adminPage } from "./routes/admin-page";
-import { checkout } from "./routes/checkout";
 import { delivery } from "./routes/delivery";
 import { devices, names } from "./routes/devices";
 import { inboxCapabilities, inboxUpload, wantsCapabilities } from "./routes/inbox-address";
 import { inboxes } from "./routes/inboxes";
 import { licenses } from "./routes/licenses";
-import { downloads, release } from "./routes/releases";
 import { shareLink } from "./routes/share-link";
 import { shareDownload, shareLanding } from "./routes/share-public";
 import { shares } from "./routes/shares";
 import { resolve } from "./routes/resolve";
 import { transfers } from "./routes/transfers";
-import { waitlist } from "./routes/waitlist";
 import { webhooks } from "./routes/webhooks";
 
 export { DeviceHub } from "./do/DeviceHub";
@@ -126,18 +123,11 @@ app.route("/api/v1/transfers", transfers);
 app.route("/api/v1/shares", shares);
 app.route("/api/v1/share-link", shareLink);
 app.route("/api/v1/licenses", licenses);
-app.route("/api/v1/checkout", checkout);
-app.route("/api/v1/release", release);
-app.route("/api/v1/waitlist", waitlist);
 // Not under a device session, and deliberately outside the per-IP rate limits
 // that guard the rest: Creem retries with backoff, and throttling a webhook
 // turns a refund into one that silently never applies (PRD 16.5).
 app.route("/api/v1/webhooks", webhooks);
 app.route("/api/v1", delivery);
-// The installer (PRD 10.1). Not under /api/, so it has to be mounted before the
-// SPA fallback below; only /download/mac and /download/mac/<file> are claimed,
-// leaving bare /download to the page that links to them.
-app.route("/download", downloads);
 // The console's shell, and the host check is load-bearing. Hono routes without
 // regard to hostname, and on `<name>.stolnk.com` every path is an inbox address
 // — `admin` is reserved as a *name* (lib/inbox.ts) but not as a slug, so

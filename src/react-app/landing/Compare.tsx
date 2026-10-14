@@ -1,3 +1,4 @@
+import { APP_STORE_URL } from "./contact.ts";
 import { useLang } from "./lang-context.ts";
 
 /**
@@ -62,7 +63,7 @@ export function Compare() {
 			</p>
 
 			<p className="page-cta">
-				<a className="button primary" href="/download">
+				<a className="button primary" href={APP_STORE_URL}>
 					{t.compare.cta}
 				</a>
 			</p>

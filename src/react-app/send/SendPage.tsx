@@ -94,7 +94,7 @@ function TerminalHint({ url, passworded }: { url: string; passworded: boolean })
 				of it.
 			</p>
 			<p className="warn-note">
-				Files sent this way are encrypted on our server with this Mac&rsquo;s public
+				Files sent this way are encrypted on our server with the recipient&rsquo;s public
 				key, not in your browser: the plaintext passes through us for the length of
 				one request. Use the box above for browser-side encryption.
 			</p>
@@ -437,13 +437,13 @@ export function SendPage({ slug }: { slug: string }) {
 			 */}
 			<p className="status">
 				<span className={`dot ${online ? "online" : "asleep"}`} />
-				{online ? "Online · ready to receive" : "Mac is asleep"}
+				{online ? "Online · ready to receive" : "Recipient is offline"}
 			</p>
 
 			{!online && screen === "ready" && (
 				<div className="callout">
 					<p>
-						Files will be encrypted and delivered automatically the moment it wakes up.
+						Files will be encrypted and delivered automatically the next time the recipient opens Stolnk.
 						They are kept for up to {inbox.ttl_hours} hours.
 					</p>
 				</div>
@@ -516,7 +516,7 @@ export function SendPage({ slug }: { slug: string }) {
 					<p className="note">
 						Encrypted in your browser.
 						<br />
-						Only this Mac can open them.
+						Only the recipient's iPhone can open them.
 					</p>
 
 					<TerminalHint url={inbox.url} passworded={inbox.password.required} />

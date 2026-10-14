@@ -123,7 +123,7 @@ function awaitControl(
 				resolve();
 			} else if (message.type === "file.error") {
 				stop();
-				reject(new LanTransferError(message.message ?? "The Mac could not accept the file."));
+				reject(new LanTransferError(message.message ?? "The recipient could not accept the file."));
 			}
 		};
 		const onClose = () => {
@@ -132,7 +132,7 @@ function awaitControl(
 		};
 		const timer = setTimeout(() => {
 			stop();
-			reject(new LanTransferError("The Mac did not answer."));
+			reject(new LanTransferError("The recipient did not answer."));
 		}, timeoutMs);
 		channel.addEventListener("message", onMessage);
 		channel.addEventListener("close", onClose);

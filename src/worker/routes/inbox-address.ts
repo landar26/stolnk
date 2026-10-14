@@ -144,7 +144,7 @@ async function capabilities(c: Context<AppEnv>, address: Address) {
 	}
 
 	return {
-		purpose: "Send a file to a folder on someone's Mac.",
+		purpose: "Send a file to a folder in someone's Stolnk app.",
 		inbox: inbox.display_name,
 		/** False while the owner is over their monthly relay allowance (PRD 16.2). */
 		accepting:
@@ -419,7 +419,7 @@ async function readAndRelay(
 			// token to give: a curl caller is not a session.
 			message: online
 				? `Accepted. ${inbox.display_name} is online and is collecting it now.`
-				: `Accepted. It will be delivered when ${inbox.display_name} next wakes up, and is held for ${heldForHours} hours.`,
+				: `Accepted. It will be delivered when ${inbox.display_name} next comes online, and is held for ${heldForHours} hours.`,
 		},
 		202,
 	);
